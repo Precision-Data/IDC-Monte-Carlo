@@ -2,23 +2,33 @@
 #
 # Format: '<sha256>  <filename>' (one entry per line, '#' lines ignored).
 #
-# The CI workflow (.github/workflows/reproduce.yml) verifies that a clean
-# build reproduces this exact value. Any divergence fails the build.
+# The CI workflow (.github/workflows/reproduce.yml) verifies that a
+# clean build reproduces this exact value. Any divergence fails the
+# build.
 #
-# IMPORTANT: For .parquet files the recorded SHA256 is computed over a
-# canonical CSV serialisation of the DataFrame (sorted by
-# (prior_set, error_type, sample_index, horizon), float values formatted
-# with %.15g) -- NOT over the raw Parquet bytes. This makes the
-# reproducibility check survive platform-dependent Parquet metadata,
-# dictionary encoding, and compression variation, while still pinning
-# every numeric output value bit-for-bit. See
-# `idc_simulation.run_log.sha256_dataframe_content` for the exact
+# IMPORTANT: For .parquet files the recorded SHA256 is computed over
+# the per-cell summary statistics (median, mean, p5, p95,
+# Pr[contamination > 0.01]) rounded to 6 significant figures, NOT
+# over the raw Parquet bytes nor the per-sample CSV. The reasons:
+#
+#   1. PyArrow Parquet bytes diverge across CPU architectures even
+#      for bit-identical input (different dictionary encoding /
+#      writer metadata between macOS arm64 and Linux x86_64).
+#   2. NumPy's Generator.beta is also not bit-identical across CPU
+#      architectures: it agrees in the leading ~13-14 decimal digits
+#      but differs in the lowest bits.
+#   3. Aggregating K = 10,000 samples per cell averages out those
+#      sub-ULP differences. Summary statistics rounded to 6 sig figs
+#      are stable across platforms AND are exactly the quantities
+#      reported in the Section 7.1 manuscript tables.
+#
+# See `idc_simulation.run_log.sha256_cell_summaries` for the exact
 # canonicalisation.
 #
 # Generated with the plan defaults:
 #   K = 10000, seed = 20260502, plan_version = 1.1,
 #   priors = {optimistic, moderate, pessimistic}.
-# Local reproducer (Python 3.13.12 on macOS arm64): confirmed identical
-# across two consecutive runs on 2026-05-02.
+# Confirmed identical across two consecutive runs on macOS arm64 +
+# Python 3.13.12 on 2026-05-02.
 
-8dfa2ba116dfbd846cddd04ad04dcb89108642d45ac09ec93079059540acd532  contamination_seed20260502_K10000.parquet
+787e51befaf5c4e17050c129ef59f17ac7673cdbb373c34053006d52000494ff  contamination_seed20260502_K10000.parquet

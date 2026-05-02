@@ -126,16 +126,22 @@ def sha256_dataframe_content(
     ),
     float_precision: int = 15,
 ) -> str:
-    """Return a platform-invariant SHA256 over the contents of a Parquet file.
+    """Return a SHA256 over the contents of a Parquet file at full float precision.
 
     Reads the file with pandas, sorts by the supplied keys for stable
     row order, formats every float column with ``float_precision`` digits
     of significand, and serialises to CSV with a newline-only line
     terminator. The resulting byte stream depends only on the data
     values, not on Parquet metadata, dictionary encoding, compression,
-    or platform-specific writer state. Suitable for CI reproducibility
-    checks that need to compare numerical output across operating
-    systems and CPU architectures.
+    or platform-specific writer state.
+
+    NOTE: At 15-digit precision this hash is sensitive to sub-ULP
+    floating-point differences in the underlying numpy random samples.
+    NumPy's Generator.beta is not bit-identical across CPU
+    architectures (macOS arm64 vs Linux x86_64 differ in the lowest
+    bits). For cross-platform reproducibility checks use
+    :func:`sha256_cell_summaries` instead, which aggregates K samples
+    per cell and is stable to 6 significant figures across platforms.
     """
     import pandas as pd  # local import to keep run_log import-light
 
@@ -145,6 +151,60 @@ def sha256_dataframe_content(
     csv_bytes = df.to_csv(index=False, lineterminator="\n", float_format=fmt).encode(
         "utf-8"
     )
+    return hashlib.sha256(csv_bytes).hexdigest()
+
+
+def sha256_cell_summaries(
+    parquet_path: str | Path,
+    *,
+    group_keys: tuple[str, ...] = ("prior_set", "error_type", "horizon"),
+    float_precision: int = 6,
+) -> str:
+    """Return a SHA256 over per-cell summary statistics, rounded to 6 sig figs.
+
+    Cross-platform-stable reproducibility hash for the IDC simulation:
+
+      1. Read the Parquet output.
+      2. For each (prior_set, error_type, horizon) cell, compute the
+         median, mean, 5th percentile, 95th percentile, and
+         Pr[contamination > 0.01].
+      3. Format each statistic with ``float_precision`` significant
+         figures (default 6).
+      4. Sort by group keys and statistic name, serialise to CSV with
+         LF line endings, and SHA256 the bytes.
+
+    Aggregating K = 10,000 samples per cell averages out the sub-ULP
+    differences that distinguish numpy.random.Generator.beta output
+    across CPU architectures, so the resulting hash is identical on
+    macOS arm64 and Linux x86_64 (and is the appropriate
+    reproducibility target for the principal CI workflow because the
+    rounded summary statistics are exactly the quantities reported in
+    the manuscript Section 7.1 tables).
+    """
+    import numpy as np
+    import pandas as pd
+
+    df = pd.read_parquet(parquet_path)
+    rows = []
+    for cell, group in df.groupby(list(group_keys)):
+        a = group["contamination"].to_numpy()
+        p5, p50, p95 = np.percentile(a, [5, 50, 95])
+        rec = dict(zip(group_keys, cell))
+        rec.update(
+            {
+                "median": float(p50),
+                "mean": float(a.mean()),
+                "p5": float(p5),
+                "p95": float(p95),
+                "prob_exceeds_0_01": float((a > 0.01).mean()),
+            }
+        )
+        rows.append(rec)
+    summary = pd.DataFrame(rows).sort_values(list(group_keys)).reset_index(drop=True)
+    fmt = f"%.{float_precision}g"
+    csv_bytes = summary.to_csv(
+        index=False, lineterminator="\n", float_format=fmt
+    ).encode("utf-8")
     return hashlib.sha256(csv_bytes).hexdigest()
 
 

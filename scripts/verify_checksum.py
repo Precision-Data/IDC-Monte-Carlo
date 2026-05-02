@@ -25,15 +25,21 @@ _SRC = Path(__file__).resolve().parent.parent / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
-from idc_simulation.run_log import sha256_dataframe_content, sha256_file  # noqa: E402
+from idc_simulation.run_log import (  # noqa: E402
+    sha256_cell_summaries,
+    sha256_file,
+)
 
 CHECKSUM_FILE = Path("outputs/checksums.txt")
 OUTPUTS_DIR = Path("outputs")
 
 
 def _hash_for(path: Path) -> str:
+    # Parquet outputs are checksummed via the per-cell summary hash so
+    # the verification is stable across CPU architectures (macOS arm64
+    # vs Linux x86_64 differ in sub-ULP bits of numpy's Beta sampler).
     if path.suffix == ".parquet":
-        return sha256_dataframe_content(path)
+        return sha256_cell_summaries(path)
     return sha256_file(path)
 
 
@@ -60,7 +66,7 @@ def main() -> int:
         if actual != expected:
             failures.append(f"mismatch: {filename}\n  expected {expected}\n  actual   {actual}")
         else:
-            kind = "content" if target.suffix == ".parquet" else "file"
+            kind = "summary" if target.suffix == ".parquet" else "file"
             print(f"OK  {filename}  ({kind})  {actual}")
         checked += 1
     if not checked:

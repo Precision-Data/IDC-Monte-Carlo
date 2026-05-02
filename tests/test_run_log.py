@@ -16,6 +16,7 @@ from idc_simulation.run_log import (
     TRACKED_DEPENDENCIES,
     attach_output_file,
     create_run_log,
+    sha256_cell_summaries,
     sha256_dataframe_content,
     sha256_file,
     write_run_log,
@@ -163,6 +164,34 @@ def test_content_hash_changes_with_data(tmp_path: Path) -> None:
     df.to_parquet(p1)
     df.assign(value=[0.2]).to_parquet(p2)
     assert sha256_dataframe_content(p1) != sha256_dataframe_content(p2)
+
+
+def test_cell_summary_hash_stable_to_perturbations(tmp_path: Path) -> None:
+    """Aggregated summary hash is insensitive to noise in the lowest
+    decimal digits of the underlying sample values, by design.
+    """
+    import numpy as np
+    import pandas as pd
+
+    rng = np.random.default_rng(0)
+    K = 10_000
+    base = pd.DataFrame(
+        {
+            "prior_set": np.repeat("a", K),
+            "error_type": np.repeat("commission", K),
+            "sample_index": np.arange(K),
+            "horizon": np.repeat(10, K),
+            "contamination": rng.beta(5.0, 95.0, size=K),
+        }
+    )
+    p1 = tmp_path / "v1.parquet"
+    p2 = tmp_path / "v2.parquet"
+    base.to_parquet(p1)
+    # Add sub-ULP noise (1e-12) to every value -- summaries unchanged at
+    # 6 sig figs.
+    perturbed = base.assign(contamination=base["contamination"] + 1e-12)
+    perturbed.to_parquet(p2)
+    assert sha256_cell_summaries(p1) == sha256_cell_summaries(p2)
 
 
 def test_write_run_log_round_trip(tmp_path: Path) -> None:
