@@ -13,9 +13,12 @@ commission and omission errors.
 
 ## Status
 
-Implements analysis plan v1.1, with one logged deviation
-([DEVIATIONS.md](DEVIATIONS.md)) clarifying the Section 5.3 convergence
-criterion. Ready to run the principal simulation against seed 20260502.
+Implements analysis plan v1.2 ([ANALYSIS_PLAN.md](ANALYSIS_PLAN.md)). The
+two methodological clarifications surfaced during the first principal
+simulation run on 2026-05-02 (convergence criterion, cross-platform
+reproducibility target) are now folded into Sections 5.3 and 6.3 of the
+plan; their original deviation entries are retained for audit in
+[DEVIATIONS.md](DEVIATIONS.md).
 
 ## How to run
 
