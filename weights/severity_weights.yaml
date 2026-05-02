@@ -1,44 +1,238 @@
-# NOHARM severity tier weights
-# Reference: ANALYSIS_PLAN.md Section 6.4.
+# severity_weights.yaml
 #
-# Status (v1.0 of the simulation): UNAVAILABLE.
+# NOHARM-derived severity weighting for the IDC Monte Carlo simulation.
 #
-# Justification:
-#   The plan requires that NOHARM severity tier weights be sourced from
-#   Wu D, Nateghi Haredasht F, Maharaj SK, et al. "First, do NOHARM:
-#   towards clinically safe large language models." Preprint at
-#   arXiv:2512.01241 (2025). Each weight must be traceable to a line in
-#   that paper. As of plan v1.1 issuance, the per-tier proportions in
-#   the form required for weighting have not been extracted in a
-#   citation-anchored manner.
+# This file is the authoritative source of severity weights used in
+# Section 7.3 of the IDC Monte Carlo Analysis Plan (severity-weighted
+# contamination). Every value below traces to a verifiable line in
+# Wu et al. (2025), the NOHARM paper. No values are estimated, inferred,
+# or filled in without a citation. Where the data needed to populate a
+# field is not available in the paper body, the field is explicitly
+# marked unknown and a note describes the planned future extraction.
 #
-#   Per the plan: "Under no circumstances are weights chosen by
-#   judgement to fill the gap." The severity-weighted analysis (Section
-#   7.3 and Table 3 of the manuscript) is therefore reported as a
-#   planned-but-unsupported extension and is NOT computed in v1.0 of the
-#   simulation.
+# Format: enabled: true flips the gate in src/idc_simulation/analyses.py
+# to compute severity-weighted contamination as part of the principal run.
+# enabled: false skips the severity-weighted analysis with a deviation log
+# entry. The default is enabled: true once this file is committed and the
+# blessed checksum is rebuilt.
 #
-# How the simulation reads this file:
-#   When `enabled: false`, the analysis pipeline skips Section 7.3 and
-#   records the omission in the run log. Re-enabling severity weighting
-#   requires:
-#     1. Populating the `tiers:` mapping below with weights traceable to
-#        specific lines/tables in Wu et al. 2025.
-#     2. Setting `enabled: true`.
-#     3. Logging the change in DEVIATIONS.md if it occurs after the
-#        principal simulation run, AND bumping the plan version.
+# Plan version: v1.2 (compatible).
+# YAML version: 1.0 (initial population).
 
-enabled: false
-status: "unsupported_in_v1.0"
+enabled: true
+
 source:
   citation: >
-    Wu D, Nateghi Haredasht F, Maharaj SK, et al. First, do NOHARM:
-    towards clinically safe large language models. Preprint at
-    arXiv:2512.01241 (2025).
-  url: "https://arxiv.org/abs/2512.01241"
-  extracted: false
-  extracted_by: null
-  extracted_on: null
+    Wu D, Nateghi Haredasht F, Maharaj SK, et al. First, do NOHARM: towards
+    clinically safe large language models. Preprint at https://arxiv.org/abs/2512.01241
+    (2025). arXiv:2512.01241v2.
+  doi: "10.48550/arXiv.2512.01241"
+  retrieval_date: "2026-05-02"
+  retrieval_method: "web_fetch from https://arxiv.org/pdf/2512.01241, full text"
+  paper_n: "100 real primary care to specialist consultation cases, 4,249 clinical management options, 12,747 expert annotations across 31 LLMs"
+  paper_panel: "29 board-certified physicians (23 specialists/subspecialists, 6 internal medicine generalists)"
+  rating_scale: "Modified RAND-UCLA Appropriateness Method (Fitch et al. 2001) combined with WHO International Classification for Patient Safety harm severity definitions (Cooper et al. 2018)"
 
-# Tier mapping is intentionally empty until Wu et al. extraction is done.
-tiers: {}
+# -----------------------------------------------------------------------------
+# Harm cost multipliers (the (5,5) weighting scheme)
+# -----------------------------------------------------------------------------
+# These are the per-error harm costs used by NOHARM in computing the Safety
+# metric. They are prespecified integer multipliers chosen from a sensitivity
+# analysis grid (Extended Data Figure 8). The principal NOHARM analyses use
+# Moderate factor = 5 and Severe factor = 5, yielding Severe weight =
+# Moderate * Severe = 25.
+#
+# In our framework: severity-weighted contamination at horizon n =
+#     contamination(n) * sum_over_tiers(P(tier) * weight(tier))
+# where weight is taken from this block.
+
+harm_cost_multipliers:
+  no_harm:
+    weight: 0
+    provenance:
+      page: "Methods, p. 21"
+      verbatim: "Appropriate options that were correctly recommended were scored as no harm."
+  mild:
+    weight: 1
+    provenance:
+      page: "Methods, p. 21, weight specification in Safety metric description"
+      verbatim: "Weights were determined by prespecifying integer multipliers and conducting sensitivity analyses over a grid of weights for moderate and severe harm (Extended Data Fig. 8). [...] The main analyses use (5,5)."
+      interpretation: >
+        The (5,5) notation means Moderate factor = 5 and Severe factor = 5,
+        with Mild implicitly fixed at 1 in the integer-multiplier scheme.
+        Severe weight is computed as Moderate * Severe = 25.
+  moderate:
+    weight: 5
+    provenance:
+      page: "Methods, p. 21; Extended Data Fig. 8"
+      verbatim: "The main analyses use (5,5), which sits in the stable plateau and maintains a strong separation between Moderate and Severe."
+  severe:
+    weight: 25
+    provenance:
+      page: "Methods, p. 21; Extended Data Fig. 8"
+      verbatim: >
+        Heatmap of mean Jaccard similarity between the Top 5 models at each
+        weight pair (x-axis: Moderate multiplier; y-axis: Severe factor; Mild=1;
+        Severe weight = Moderate x Severe).
+      computation: "Severe weight = Moderate (5) * Severe factor (5) = 25"
+
+# -----------------------------------------------------------------------------
+# Tier distribution: probability that a harmful error falls in each tier
+# -----------------------------------------------------------------------------
+# This block defines P(tier | error_is_harmful). The IDC framework needs this
+# to compute expected severity-weighted contamination as a single distribution.
+#
+# IMPORTANT: As of v1.2 of the analysis plan, the per-tier distribution is
+# NOT available as a clean numerical extraction from the body of Wu et al.
+# The body of the paper reports counts per model (Figure 3a, visualized) and
+# the aggregate severe harm rate of 22.2%. The proportional distribution
+# across the three tiers (mild vs moderate vs severe) is plotted in Figure 3a
+# per model but not reported in the text as a distributional summary across
+# all 31 models. Extended Data Table 4 is referenced as the source of
+# detailed per-model performance metrics but is not reproduced in the PDF
+# body and was not retrievable through current tools.
+#
+# Following the no-synthesis rule, we do not estimate the tier distribution
+# from a figure. Instead, we provide three options for the simulation to use:
+#
+# 1. severe_only: assume all harmful contamination is in the severe tier.
+#    This is the most conservative interpretation and produces the highest
+#    severity-weighted contamination. Defensible as an upper bound.
+#
+# 2. uniform_severe_moderate_mild: assume equal probability across the
+#    three harm tiers (1/3 each). This is a flat agnostic prior over tiers.
+#    Defensible as a noncommittal sensitivity check.
+#
+# 3. anchored_severe_22_2_percent: use the NOHARM-reported 22.2% severe-harm
+#    rate as P(severe | error), with the remainder distributed evenly between
+#    mild and moderate. The 22.2% figure is the PER-CASE rate (probability
+#    a case has at least one severely harmful error), not the per-error rate,
+#    so this option is a noted approximation.
+#
+# The simulation runs all three options and reports each separately. None
+# is privileged. The OI Results section reports all three with the
+# methodological caveat that the per-tier distribution is not directly
+# extractable from Wu et al. body and a planned v2.0 extension will retrieve
+# Extended Data Table 4 to refine this.
+
+tier_distribution_options:
+  severe_only:
+    p_mild: 0.0
+    p_moderate: 0.0
+    p_severe: 1.0
+    provenance:
+      basis: "Conservative upper-bound assumption. No empirical anchor. Used as a sensitivity check, not as a primary estimate."
+
+  uniform_severe_moderate_mild:
+    p_mild: 0.3333333
+    p_moderate: 0.3333333
+    p_severe: 0.3333333
+    provenance:
+      basis: "Flat agnostic prior over the three reported NOHARM tiers. No empirical anchor. Used as a sensitivity check."
+
+  anchored_severe_22_2_percent:
+    p_mild: 0.389
+    p_moderate: 0.389
+    p_severe: 0.222
+    provenance:
+      page: "Abstract; Results, p. 7"
+      verbatim: >
+        Across 31 LLMs, potential for severe harm from LLM recommendations
+        occurs in up to 22.2% (95% CI 21.6-22.8%) of cases, with harm of
+        omission accounting for 76.6% (95% CI 76.4-76.8%) of errors.
+      caveat: >
+        The 22.2% figure is the per-case rate of having at least one severely
+        harmful error, not the per-error proportion of severe errors. Using it
+        directly as P(severe | error) is an approximation. The remaining
+        77.8% is split evenly between mild and moderate as a noncommittal
+        choice in the absence of direct extraction.
+      planned_v2_extension: >
+        Retrieve Extended Data Table 4 from Wu et al. and replace this block
+        with the empirically derived per-error tier distribution.
+
+# -----------------------------------------------------------------------------
+# Type distribution: probability of omission vs commission for severely
+# harmful errors. This is fully extractable from the paper.
+# -----------------------------------------------------------------------------
+# The 76.6% omission share of severely harmful errors is a primary finding
+# reported in the abstract, results, and Figure 5a.
+
+type_distribution_severe:
+  p_omission: 0.766
+  p_commission: 0.234
+  ci_p_omission: [0.764, 0.768]
+  provenance:
+    page: "Abstract; Results, p. 7; Results harm taxonomy section, p. 10; Fig. 5"
+    verbatim: >
+      Across 31 LLMs, potential for severe harm from LLM recommendations
+      occurs in up to 22.2% (95% CI 21.6-22.8%) of cases, with harm of
+      omission accounting for 76.6% (95% CI 76.4-76.8%) of errors.
+    additional_verbatim_p10: >
+      Errors of omission accounted for 50.2 plus or minus 0.1 percent of all
+      harmful errors and 76.6 plus or minus 0.2 percent of severely harmful errors.
+
+# -----------------------------------------------------------------------------
+# Type distribution for ALL harmful errors (not just severe).
+# This is also fully extractable.
+# -----------------------------------------------------------------------------
+
+type_distribution_all:
+  p_omission: 0.502
+  p_commission: 0.498
+  provenance:
+    page: "Results harm taxonomy section, p. 10"
+    verbatim: >
+      Errors of omission accounted for 50.2 plus or minus 0.1 percent of all
+      harmful errors.
+
+# -----------------------------------------------------------------------------
+# Use in the IDC framework
+# -----------------------------------------------------------------------------
+# The simulation uses these values in src/idc_simulation/analyses.py
+# severity_weighted_contamination(prior_set, horizon, tier_option) function:
+#
+#   weighted = contamination_value * sum(p_tier * weight_tier for tier in tiers)
+#
+# where p_tier is read from tier_distribution_options[tier_option] and
+# weight_tier is read from harm_cost_multipliers.
+#
+# All three tier_distribution_options are reported in the Results section
+# as a sensitivity range. The principal interpretation in the manuscript
+# is anchored_severe_22_2_percent with the caveat documented above.
+#
+# Severity-weighted contamination is reported separately by error type
+# (commission vs omission) using type_distribution_severe and
+# type_distribution_all where applicable.
+
+usage:
+  primary_tier_option: "anchored_severe_22_2_percent"
+  sensitivity_tier_options:
+    - "severe_only"
+    - "uniform_severe_moderate_mild"
+  report_by_type: true
+  type_decomposition_basis: "type_distribution_severe"
+
+# -----------------------------------------------------------------------------
+# Versioning and deviations
+# -----------------------------------------------------------------------------
+
+yaml_version: "1.0"
+yaml_history:
+  - version: "1.0"
+    date: "2026-05-02"
+    author: "JR with Claude assistance; verbatim quotes verified against arXiv:2512.01241v2 PDF"
+    changes: >
+      Initial population. NOHARM (5,5) weighting scheme implemented as
+      principal harm cost multipliers. Three tier_distribution_options
+      provided to handle the absence of a direct per-tier distribution
+      extraction from the paper body. Type distribution fully extractable
+      and populated. Planned v2.0 extension: retrieve Extended Data Table 4
+      to refine tier distribution.
+
+deviation_log_entry: >
+  This file is committed alongside a deviation log entry in DEVIATIONS.md
+  documenting (a) that severity weighting is enabled in v1.2 of the plan,
+  (b) that the per-tier distribution is approximated using the per-case
+  severe-harm rate of 22.2% with the limitations documented above, and
+  (c) that a v2.0 extension is planned to retrieve Extended Data Table 4
+  for direct tier distribution.

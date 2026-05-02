@@ -139,6 +139,17 @@ def _figure_box_at_horizon(
     return out_path
 
 
+def _write_csv_six_sig_figs(path: Path, df: pd.DataFrame) -> Path:
+    """Write a CSV with floats formatted to six significant figures.
+
+    Used for severity-weighted Table 3 so the manuscript table is
+    cross-platform stable (the Section 6.3 reproducibility precision).
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(path, index=False, lineterminator="\n", float_format="%.6g")
+    return path
+
+
 def write_all_outputs(
     parquet_path: str | Path,
     *,
@@ -156,7 +167,11 @@ def write_all_outputs(
     tables_dir = output_dir / "tables"
     figures_dir = output_dir / "figures"
 
-    result = analyse_canonical(parquet_path, weights_path=weights_path)
+    result = analyse_canonical(
+        parquet_path,
+        weights_path=weights_path,
+        output_dir=output_dir,
+    )
 
     written: list[tuple[Path, str]] = []
 
@@ -192,11 +207,18 @@ def write_all_outputs(
     if result.severity_weighted is not None:
         written.append(
             (
-                _write_csv(
-                    tables_dir / "table3_severity_weighted.csv",
+                _write_csv_six_sig_figs(
+                    tables_dir / "severity_weighted.csv",
                     result.severity_weighted,
                 ),
                 "Table 3: severity-weighted contamination (Section 7.3)",
+            )
+        )
+    if result.severity_weighted_path is not None:
+        written.append(
+            (
+                result.severity_weighted_path,
+                "Severity-weighted Parquet output (Section 7.3 source-of-truth)",
             )
         )
 

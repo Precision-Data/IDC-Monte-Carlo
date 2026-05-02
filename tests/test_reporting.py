@@ -55,8 +55,11 @@ def test_write_all_outputs_creates_expected_files(sim_artifacts, tmp_path) -> No
     assert (out_dir / "tables" / "severity_weighting_status.json").is_file()
     assert (out_dir / "figures" / "credible_intervals_by_horizon.png").is_file()
     assert (out_dir / "figures" / "contamination_box_h10.png").is_file()
-    # Severity table NOT written (gated off)
-    assert not (out_dir / "tables" / "table3_severity_weighted.csv").exists()
+    # Severity weighting is now enabled in plan v1.2 + the populated YAML;
+    # the manuscript Table 3 CSV and the source-of-truth Parquet are
+    # both produced.
+    assert (out_dir / "tables" / "severity_weighted.csv").is_file()
+    assert (out_dir / "severity_weighted.parquet").is_file()
 
 
 def test_run_log_records_every_output_hash(sim_artifacts, tmp_path) -> None:
@@ -68,8 +71,9 @@ def test_run_log_records_every_output_hash(sim_artifacts, tmp_path) -> None:
         output_dir=out_dir,
         run_log=sim_artifacts.run_log,
     )
-    # 2 csv tables + 2 json status files + 2 figures = 6 attached
-    assert len(sim_artifacts.run_log["outputs"]) == log_before_count + 6
+    # 2 csv tables + 2 json status files + 2 figures + 1 severity csv +
+    # 1 severity parquet = 8 attached
+    assert len(sim_artifacts.run_log["outputs"]) == log_before_count + 8
     for entry in sim_artifacts.run_log["outputs"][log_before_count:]:
         assert len(entry["sha256"]) == 64
         # Verify hash matches file

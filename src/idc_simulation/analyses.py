@@ -80,8 +80,26 @@ def summarise_primary(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
-# Section 7.3: severity-weighted contamination (gated)
+# Section 7.3: severity-weighted contamination (gated on severity_weights.yaml)
 # ---------------------------------------------------------------------------
+
+# Required NOHARM tiers in the harm_cost_multipliers block of the YAML.
+# The framework's severity-weighted contamination uses mild / moderate /
+# severe; ``no_harm`` is permitted in the YAML for documentation but does
+# not feed the weighted-aggregate computation (no_harm errors contribute
+# zero by definition).
+HARM_TIERS_REQUIRED: tuple[str, ...] = ("mild", "moderate", "severe")
+
+# Per-tier-option probability mass functions are validated to sum to 1
+# within this tolerance. The YAML uses 0.3333333 for the uniform option,
+# which sums to 0.9999999; 1e-3 is a comfortable budget that catches
+# typos without demanding numerical perfection.
+TIER_PROBABILITY_SUM_TOLERANCE: float = 1e-3
+
+
+class SeverityWeightingError(ValueError):
+    """Raised when severity_weights.yaml is structurally invalid or when
+    severity-weighted analysis is requested while the gate is closed."""
 
 
 @dataclass(frozen=True)
@@ -89,39 +107,263 @@ class SeverityWeightingStatus:
     enabled: bool
     citation: str
     skipped_reason: str | None
-    weights: dict[str, float]
+    harm_weights: Mapping[str, float]
+    tier_options: Mapping[str, Mapping[str, float]]
+    primary_tier_option: str
+    sensitivity_tier_options: tuple[str, ...]
+    type_distribution_severe: Mapping[str, float]
+    type_distribution_all: Mapping[str, float]
+
+
+def _validate_harm_cost_multipliers(raw: Mapping) -> dict[str, float]:
+    if "harm_cost_multipliers" not in raw:
+        raise SeverityWeightingError(
+            "severity_weights.yaml: missing 'harm_cost_multipliers' block"
+        )
+    block = raw["harm_cost_multipliers"]
+    weights: dict[str, float] = {}
+    for tier in HARM_TIERS_REQUIRED:
+        if tier not in block:
+            raise SeverityWeightingError(
+                f"severity_weights.yaml: harm_cost_multipliers missing tier '{tier}'"
+            )
+        entry = block[tier]
+        if "weight" not in entry:
+            raise SeverityWeightingError(
+                f"severity_weights.yaml: tier '{tier}' has no 'weight' field"
+            )
+        w = entry["weight"]
+        if not isinstance(w, (int, float)) or isinstance(w, bool):
+            raise SeverityWeightingError(
+                f"severity_weights.yaml: tier '{tier}' weight must be numeric "
+                f"(got {type(w).__name__})"
+            )
+        weights[tier] = float(w)
+    return weights
+
+
+def _validate_tier_options(
+    raw: Mapping,
+) -> dict[str, dict[str, float]]:
+    if "tier_distribution_options" not in raw:
+        raise SeverityWeightingError(
+            "severity_weights.yaml: missing 'tier_distribution_options' block"
+        )
+    block = raw["tier_distribution_options"]
+    if not isinstance(block, Mapping) or not block:
+        raise SeverityWeightingError(
+            "severity_weights.yaml: tier_distribution_options must be a non-empty mapping"
+        )
+    out: dict[str, dict[str, float]] = {}
+    for name, opt in block.items():
+        probs = {
+            "p_mild": float(opt.get("p_mild", 0.0)),
+            "p_moderate": float(opt.get("p_moderate", 0.0)),
+            "p_severe": float(opt.get("p_severe", 0.0)),
+        }
+        s = sum(probs.values())
+        if abs(s - 1.0) > TIER_PROBABILITY_SUM_TOLERANCE:
+            raise SeverityWeightingError(
+                f"tier_distribution_options['{name}']: p_mild+p_moderate+p_severe = "
+                f"{s:.6f} (must be within {TIER_PROBABILITY_SUM_TOLERANCE} of 1.0)"
+            )
+        out[str(name)] = probs
+    return out
 
 
 def load_severity_weighting(weights_path: str | Path) -> SeverityWeightingStatus:
-    """Read ``weights/severity_weights.yaml`` and return its enabled status.
+    """Read ``weights/severity_weights.yaml`` and return its parsed status.
 
-    Per plan Section 6.4, if the YAML reports ``enabled: false`` the
-    severity-weighted analysis (Section 7.3) is skipped and the gap is
-    logged. Tier weights chosen by judgement to fill the gap are
-    forbidden.
+    Returns a ``SeverityWeightingStatus`` regardless of the gate; the
+    caller decides whether ``enabled`` and ``primary_tier_option`` are
+    sufficient to proceed with Section 7.3 computation.
+
+    Validates the structure of the YAML even when ``enabled`` is false,
+    so that a malformed file is loud instead of silently disabled.
     """
     raw = yaml.safe_load(Path(weights_path).read_text())
     enabled = bool(raw.get("enabled", False))
     citation = str((raw.get("source") or {}).get("citation", "")).strip()
+
+    skipped_reason: str | None = None
+    harm_weights: dict[str, float] = {}
+    tier_options: dict[str, dict[str, float]] = {}
+    primary_tier_option = ""
+    sensitivity: tuple[str, ...] = ()
+    td_severe: Mapping[str, float] = {}
+    td_all: Mapping[str, float] = {}
+
+    has_richness = "harm_cost_multipliers" in raw or "tier_distribution_options" in raw
+
+    if has_richness:
+        # Always validate when the structured blocks exist so a typo is
+        # caught even with enabled=false.
+        harm_weights = _validate_harm_cost_multipliers(raw)
+        tier_options = _validate_tier_options(raw)
+        usage = raw.get("usage") or {}
+        primary_tier_option = str(usage.get("primary_tier_option", ""))
+        if primary_tier_option and primary_tier_option not in tier_options:
+            raise SeverityWeightingError(
+                f"usage.primary_tier_option '{primary_tier_option}' is not a "
+                f"defined tier_distribution_options entry"
+            )
+        sensitivity = tuple(str(x) for x in (usage.get("sensitivity_tier_options") or ()))
+        td_severe = {
+            "p_omission": float((raw.get("type_distribution_severe") or {}).get("p_omission", 0.0)),
+            "p_commission": float((raw.get("type_distribution_severe") or {}).get("p_commission", 0.0)),
+        }
+        td_all = {
+            "p_omission": float((raw.get("type_distribution_all") or {}).get("p_omission", 0.0)),
+            "p_commission": float((raw.get("type_distribution_all") or {}).get("p_commission", 0.0)),
+        }
+    elif enabled:
+        # enabled but no structured blocks -- fail loudly per the no-judgement rule.
+        raise SeverityWeightingError(
+            "severity_weights.yaml has enabled=true but neither "
+            "harm_cost_multipliers nor tier_distribution_options is present"
+        )
+
     if not enabled:
-        return SeverityWeightingStatus(
-            enabled=False,
-            citation=citation,
-            skipped_reason=str(raw.get("status", "disabled")),
-            weights={},
-        )
-    tiers = raw.get("tiers") or {}
-    if not tiers:
-        return SeverityWeightingStatus(
-            enabled=False,
-            citation=citation,
-            skipped_reason="enabled=true but tiers mapping is empty",
-            weights={},
-        )
-    weights = {str(k): float(v) for k, v in tiers.items()}
+        skipped_reason = str(raw.get("status", "disabled"))
+
     return SeverityWeightingStatus(
-        enabled=True, citation=citation, skipped_reason=None, weights=weights
+        enabled=enabled,
+        citation=citation,
+        skipped_reason=skipped_reason,
+        harm_weights=harm_weights,
+        tier_options=tier_options,
+        primary_tier_option=primary_tier_option,
+        sensitivity_tier_options=sensitivity,
+        type_distribution_severe=td_severe,
+        type_distribution_all=td_all,
     )
+
+
+def expected_harm_weight(
+    status: SeverityWeightingStatus, tier_option: str
+) -> float:
+    """Compute E[harm cost per error] under one tier_distribution_option.
+
+      E[harm] = p_mild * w_mild + p_moderate * w_moderate + p_severe * w_severe
+
+    Used by :func:`severity_weighted_contamination` to scale the raw
+    contamination samples per tier scenario. ``no_harm`` contributes
+    zero by definition and is not part of the sum.
+    """
+    if tier_option not in status.tier_options:
+        raise SeverityWeightingError(
+            f"unknown tier_option '{tier_option}'; available: "
+            f"{sorted(status.tier_options)}"
+        )
+    p = status.tier_options[tier_option]
+    w = status.harm_weights
+    return (
+        p["p_mild"] * w["mild"]
+        + p["p_moderate"] * w["moderate"]
+        + p["p_severe"] * w["severe"]
+    )
+
+
+def severity_weighted_contamination(
+    canonical_output_path: str | Path,
+    weights_path: str | Path,
+    output_dir: str | Path,
+    *,
+    threshold: float = 0.01,
+) -> Path:
+    """Compute severity-weighted contamination per Section 7.3 of the plan.
+
+    Reads the canonical simulation Parquet (one row per
+    (prior_set, error_type, sample_index, horizon)) and the severity
+    weights YAML. For every (prior_set, horizon, tier_option) combination
+    the function constructs a per-sample, type-weighted, severity-weighted
+    contamination value:
+
+        type_weighted[k]   = p_omission * omission[k] + p_commission * commission[k]
+        weighted[k]        = type_weighted[k] * E[harm | tier_option]
+
+    where p_omission / p_commission come from
+    ``type_distribution_severe`` (per the YAML's ``usage.type_decomposition_basis``
+    setting) and ``E[harm | tier_option]`` is the harm-weighted expectation
+    over the NOHARM tier mass function defined by ``tier_option``.
+
+    Summary statistics (median, mean, p5, p95, P[weighted > threshold]) are
+    then computed across the K samples per cell and written as
+    ``severity_weighted.parquet`` under ``output_dir``. The columns p_omission
+    and p_commission are emitted alongside as informational documentation
+    of the type-mixing weights actually used.
+
+    Raises :class:`SeverityWeightingError` if the YAML gate is closed
+    (``enabled: false``); the analysis must never be silently skipped at
+    the function boundary.
+    """
+    status = load_severity_weighting(weights_path)
+    if not status.enabled:
+        raise SeverityWeightingError(
+            "severity_weights.yaml has enabled=false; severity-weighted "
+            "analysis cannot run. Either flip the gate or call this "
+            "function only when status.enabled is true."
+        )
+
+    df = pd.read_parquet(canonical_output_path)
+    p_om = status.type_distribution_severe["p_omission"]
+    p_co = status.type_distribution_severe["p_commission"]
+
+    rows: list[dict] = []
+    cells = df.groupby(["prior_set", "horizon"], sort=True)
+    tier_names = [status.primary_tier_option, *status.sensitivity_tier_options]
+    seen: set[str] = set()
+    ordered_tiers = [t for t in tier_names if not (t in seen or seen.add(t))]
+
+    for (ps, h), grp in cells:
+        comm = grp.loc[grp["error_type"] == "commission", "contamination"].to_numpy()
+        omis = grp.loc[grp["error_type"] == "omission", "contamination"].to_numpy()
+        if comm.size != omis.size or comm.size == 0:
+            raise SeverityWeightingError(
+                f"cell prior_set={ps} horizon={h}: expected matched K samples "
+                f"of commission and omission (got {comm.size} vs {omis.size})"
+            )
+        type_weighted = p_co * comm + p_om * omis
+        for tname in ordered_tiers:
+            ew = expected_harm_weight(status, tname)
+            weighted = type_weighted * ew
+            p5, p50, p95 = np.percentile(weighted, [5, 50, 95])
+            rows.append(
+                {
+                    "prior_set": ps,
+                    "horizon": int(h),
+                    "tier_option": tname,
+                    "median": float(p50),
+                    "mean": float(weighted.mean()),
+                    "p5": float(p5),
+                    "p95": float(p95),
+                    "p_exceeds_threshold": float((weighted > threshold).mean()),
+                    "p_omission": p_om,
+                    "p_commission": p_co,
+                }
+            )
+
+    out_df = pd.DataFrame(rows)
+    out_df = out_df.sort_values(["prior_set", "horizon", "tier_option"]).reset_index(
+        drop=True
+    )
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    out_path = output_dir / "severity_weighted.parquet"
+
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    table = pa.Table.from_pandas(out_df, preserve_index=False)
+    pq.write_table(
+        table,
+        out_path,
+        compression="snappy",
+        use_dictionary=True,
+        write_statistics=False,
+    )
+    return out_path
 
 
 # ---------------------------------------------------------------------------
@@ -366,34 +608,55 @@ class AnalysisResult:
     robustness: dict
     severity_status: SeverityWeightingStatus
     severity_weighted: pd.DataFrame | None
+    severity_weighted_path: Path | None
 
 
 def analyse_canonical(
     parquet_path: str | Path,
     *,
     weights_path: str | Path,
+    output_dir: str | Path | None = None,
 ) -> AnalysisResult:
-    """Run all Section 7 analyses that consume only the canonical Parquet."""
+    """Run all Section 7 analyses that consume only the canonical Parquet.
+
+    When the severity-weighting gate (severity_weights.yaml ``enabled``)
+    is true and ``output_dir`` is supplied, the Section 7.3 weighted
+    analysis is computed via :func:`severity_weighted_contamination` and
+    written as ``severity_weighted.parquet`` under ``output_dir``. The
+    in-memory DataFrame and the file path are both returned in the
+    :class:`AnalysisResult`.
+
+    When ``output_dir`` is omitted but the gate is open, the weighted
+    analysis still runs in-memory (no Parquet written). When the gate
+    is closed (``enabled: false``) the analysis is skipped and the
+    deviation justification is recorded in ``severity_status``.
+    """
     df = pd.read_parquet(parquet_path)
     primary = summarise_primary(df)
     hospital = hospital_scale(df)
     rob = robustness_ratio(df)
     sev_status = load_severity_weighting(weights_path)
     sev_df: pd.DataFrame | None = None
+    sev_path: Path | None = None
     if sev_status.enabled:
-        # Severity-weighted contamination is computed by re-grouping the
-        # contamination distribution by NOHARM tier weight. This branch
-        # is intentionally unreachable in v1.0 (severity weights not
-        # yet extracted from Wu et al. 2025); the structure is left in
-        # place for future activation per Section 6.4 reactivation rules.
-        weighted = df["contamination"].copy()
-        weighted *= sum(sev_status.weights.values())
-        df_sev = df.assign(contamination=weighted)
-        sev_df = summarise_primary(df_sev)
+        if output_dir is not None:
+            sev_path = severity_weighted_contamination(
+                parquet_path, weights_path, output_dir
+            )
+            sev_df = pd.read_parquet(sev_path)
+        else:
+            # In-memory recomputation when no output_dir is supplied
+            # (used by tests that don't want filesystem side effects).
+            import tempfile
+
+            with tempfile.TemporaryDirectory() as td:
+                p = severity_weighted_contamination(parquet_path, weights_path, td)
+                sev_df = pd.read_parquet(p)
     return AnalysisResult(
         primary=primary,
         hospital=hospital,
         robustness=rob,
         severity_status=sev_status,
         severity_weighted=sev_df,
+        severity_weighted_path=sev_path,
     )

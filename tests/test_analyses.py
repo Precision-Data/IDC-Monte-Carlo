@@ -13,19 +13,23 @@ import pandas as pd
 import pytest
 
 from idc_simulation.analyses import (
+    HARM_TIERS_REQUIRED,
     HOSPITAL_DOCS_PER_YEAR,
     HOSPITAL_HORIZON,
     HOSPITAL_YEARS,
     MULTI_AGENT_P_KAPPA,
     MULTI_AGENT_P_MU,
     PROB_THRESHOLD,
+    SeverityWeightingError,
     analyse_canonical,
+    expected_harm_weight,
     hospital_scale,
     load_severity_weighting,
     robustness_ratio,
     sensitivity_R_zero,
     sensitivity_copula,
     sensitivity_multi_agent_P,
+    severity_weighted_contamination,
     summarise_primary,
 )
 from idc_simulation.priors import load_all_prior_sets
@@ -119,11 +123,175 @@ def test_prob_exceeds_uses_threshold(canonical_df: pd.DataFrame) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_severity_weighting_is_disabled_in_v1_0() -> None:
+def test_severity_weighting_loads_with_full_structure() -> None:
     status = load_severity_weighting(WEIGHTS_PATH)
-    assert status.enabled is False
-    assert status.skipped_reason is not None
-    assert status.weights == {}
+    assert status.enabled is True
+    assert status.skipped_reason is None
+    # Harm cost multipliers per the (5,5) NOHARM scheme
+    assert status.harm_weights == {"mild": 1.0, "moderate": 5.0, "severe": 25.0}
+    # Three tier distribution options present, primary is anchored_severe_22_2_percent
+    assert set(status.tier_options) == {
+        "severe_only",
+        "uniform_severe_moderate_mild",
+        "anchored_severe_22_2_percent",
+    }
+    assert status.primary_tier_option == "anchored_severe_22_2_percent"
+    # Type distribution for severe errors: 76.6% omission per Wu et al.
+    assert status.type_distribution_severe["p_omission"] == pytest.approx(0.766)
+    assert status.type_distribution_severe["p_commission"] == pytest.approx(0.234)
+
+
+def test_severity_weighting_each_tier_option_sums_to_one() -> None:
+    status = load_severity_weighting(WEIGHTS_PATH)
+    for name, probs in status.tier_options.items():
+        s = probs["p_mild"] + probs["p_moderate"] + probs["p_severe"]
+        assert abs(s - 1.0) < 1e-3, f"{name} sums to {s}"
+
+
+def test_severity_weighting_rejects_missing_harm_block(tmp_path) -> None:
+    bad = tmp_path / "no_harm.yaml"
+    bad.write_text(
+        "enabled: true\n"
+        "tier_distribution_options:\n"
+        "  severe_only: {p_mild: 0, p_moderate: 0, p_severe: 1}\n"
+    )
+    with pytest.raises(SeverityWeightingError, match="harm_cost_multipliers"):
+        load_severity_weighting(bad)
+
+
+def test_severity_weighting_rejects_non_numeric_weight(tmp_path) -> None:
+    bad = tmp_path / "bad_weight.yaml"
+    bad.write_text(
+        "enabled: true\n"
+        "harm_cost_multipliers:\n"
+        "  mild: {weight: 'one'}\n"
+        "  moderate: {weight: 5}\n"
+        "  severe: {weight: 25}\n"
+        "tier_distribution_options:\n"
+        "  severe_only: {p_mild: 0, p_moderate: 0, p_severe: 1}\n"
+    )
+    with pytest.raises(SeverityWeightingError, match="must be numeric"):
+        load_severity_weighting(bad)
+
+
+def test_severity_weighting_rejects_tier_probs_not_summing_to_one(tmp_path) -> None:
+    bad = tmp_path / "bad_probs.yaml"
+    bad.write_text(
+        "enabled: true\n"
+        "harm_cost_multipliers:\n"
+        "  mild: {weight: 1}\n"
+        "  moderate: {weight: 5}\n"
+        "  severe: {weight: 25}\n"
+        "tier_distribution_options:\n"
+        "  bad_option: {p_mild: 0.5, p_moderate: 0.5, p_severe: 0.5}\n"
+    )
+    with pytest.raises(SeverityWeightingError, match="within"):
+        load_severity_weighting(bad)
+
+
+def test_expected_harm_weight_severe_only_is_25() -> None:
+    status = load_severity_weighting(WEIGHTS_PATH)
+    assert expected_harm_weight(status, "severe_only") == pytest.approx(25.0)
+
+
+def test_expected_harm_weight_uniform_is_31_over_3() -> None:
+    status = load_severity_weighting(WEIGHTS_PATH)
+    # E[w] = (1+5+25)/3 = 31/3 ~= 10.333
+    assert expected_harm_weight(status, "uniform_severe_moderate_mild") == pytest.approx(
+        31.0 / 3.0, abs=1e-3
+    )
+
+
+def test_severity_weighted_writes_parquet_with_expected_schema(
+    prior_sets, tmp_path
+) -> None:
+    res = run_simulation(
+        prior_sets,
+        K=TEST_K,
+        seed=42,
+        prespecified=False,
+        output_dir=tmp_path / "out",
+        runs_dir=tmp_path / "runs",
+        repo_root=REPO_ROOT,
+    )
+    out = severity_weighted_contamination(
+        res.output_path, WEIGHTS_PATH, tmp_path / "rendered"
+    )
+    assert out.is_file()
+    sw = pd.read_parquet(out)
+    expected_cols = {
+        "prior_set",
+        "horizon",
+        "tier_option",
+        "median",
+        "mean",
+        "p5",
+        "p95",
+        "p_exceeds_threshold",
+        "p_omission",
+        "p_commission",
+    }
+    assert set(sw.columns) == expected_cols
+    # 3 prior_sets * 4 horizons * 3 tier_options = 36 rows
+    assert len(sw) == 3 * 4 * 3
+    assert sw["p_omission"].to_list() == pytest.approx([0.766] * len(sw))
+    assert sw["p_commission"].to_list() == pytest.approx([0.234] * len(sw))
+
+
+def test_severity_weighted_severe_only_equals_25x_type_weighted(
+    prior_sets, tmp_path
+) -> None:
+    """Per the brief: severity-weighted under severe_only should be 25x
+    the unweighted (type-mixed) contamination, where 25 is the severe
+    tier weight from the YAML.
+    """
+    import numpy as np
+
+    res = run_simulation(
+        prior_sets,
+        K=TEST_K,
+        seed=11,
+        prespecified=False,
+        output_dir=tmp_path / "out",
+        runs_dir=tmp_path / "runs",
+        repo_root=REPO_ROOT,
+    )
+    out = severity_weighted_contamination(
+        res.output_path, WEIGHTS_PATH, tmp_path / "rendered"
+    )
+    sw = pd.read_parquet(out)
+    df = pd.read_parquet(res.output_path)
+
+    p_om, p_co = 0.766, 0.234
+    for (ps, h), grp in df.groupby(["prior_set", "horizon"]):
+        comm = grp.loc[grp["error_type"] == "commission", "contamination"].to_numpy()
+        omis = grp.loc[grp["error_type"] == "omission", "contamination"].to_numpy()
+        type_weighted = p_co * comm + p_om * omis
+        expected_median = float(np.median(type_weighted * 25.0))
+        actual = sw[
+            (sw["prior_set"] == ps)
+            & (sw["horizon"] == int(h))
+            & (sw["tier_option"] == "severe_only")
+        ]["median"].iloc[0]
+        assert actual == pytest.approx(expected_median, rel=1e-9)
+
+
+def test_severity_weighted_fails_loud_when_disabled(prior_sets, tmp_path) -> None:
+    res = run_simulation(
+        prior_sets,
+        K=500,
+        seed=1,
+        prespecified=False,
+        output_dir=tmp_path / "out",
+        runs_dir=tmp_path / "runs",
+        repo_root=REPO_ROOT,
+    )
+    disabled_yaml = tmp_path / "disabled.yaml"
+    disabled_yaml.write_text("enabled: false\nstatus: 'manual disable for test'\n")
+    with pytest.raises(SeverityWeightingError, match="enabled=false"):
+        severity_weighted_contamination(
+            res.output_path, disabled_yaml, tmp_path / "rendered"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -220,9 +388,16 @@ def test_analyse_canonical_runs_end_to_end(prior_sets, tmp_path) -> None:
         runs_dir=tmp_path / "runs",
         repo_root=REPO_ROOT,
     )
-    out = analyse_canonical(res.output_path, weights_path=WEIGHTS_PATH)
+    out = analyse_canonical(
+        res.output_path,
+        weights_path=WEIGHTS_PATH,
+        output_dir=tmp_path / "rendered",
+    )
     assert len(out.primary) == 3 * len(ERROR_TYPES) * len(DEFAULT_HORIZONS)
     assert len(out.hospital) == 3 * len(ERROR_TYPES)
     assert "ratio" in out.robustness
-    assert out.severity_status.enabled is False
-    assert out.severity_weighted is None
+    assert out.severity_status.enabled is True
+    assert out.severity_weighted is not None
+    assert len(out.severity_weighted) == 3 * len(DEFAULT_HORIZONS) * 3
+    assert out.severity_weighted_path is not None
+    assert out.severity_weighted_path.is_file()
