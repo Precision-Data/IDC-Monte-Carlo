@@ -1,0 +1,56 @@
+name: reproduce
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  reproduce:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: "pip"
+
+      - name: Install pinned dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -e .
+
+      - name: Rebuild matplotlib font cache
+        run: |
+          python -c "import matplotlib.font_manager as fm; fm.fontManager.findfont('DejaVu Sans')"
+
+      - name: Run test suite
+        run: pytest -v
+
+      - name: Run principal simulation
+        run: |
+          python -m idc_simulation run \
+            --priors-dir priors \
+            --weights-path weights/severity_weights.yaml \
+            --output-dir outputs \
+            --runs-dir runs \
+            --repo-root .
+
+      - name: Verify canonical-output checksum
+        run: python scripts/verify_checksum.py
+
+      - name: Upload run artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: idc-monte-carlo-debug
+          path: |
+            outputs/
+            runs/
+          retention-days: 7

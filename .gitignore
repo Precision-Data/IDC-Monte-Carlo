@@ -49,7 +49,9 @@ htmlcov/
 Thumbs.db
 
 # Project-specific: simulation outputs and run logs are NOT committed
-# (they are reproducible from code + seed; canonical checksums are tracked separately)
-outputs/
-runs/
+# (they are reproducible from code + seed; canonical checksums ARE
+# tracked under outputs/checksums.txt). The directory itself is not
+# ignored so that the exception for checksums.txt is reachable.
+outputs/*
+runs/*
 !outputs/checksums.txt
