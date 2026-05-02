@@ -65,6 +65,41 @@ no edits to the plan body required).
 
 ---
 
+## 2026-05-02: NOHARM per-tier distribution extraction attempt closed (Decision B)
+
+### Context
+
+The severity-weighting deviation entry (logged on the same date) noted that the per-tier harm distribution in `severity_weights.yaml` is approximated using the per-case 22.2% severe-harm rate from Wu et al. 2025 with the remainder split evenly between mild and moderate, and that retrieval of empirical per-error tier proportions from the public NOHARM data was a planned v2.0 extension.
+
+### Action taken
+
+Two-step exploration of the public NOHARM dashboard repository (https://github.com/HealthRex/harmdash, archived; https://github.com/HealthRex-ARISE/harmdash, active fork). The active fork URL returned 404 at retrieval time, so the archived repository at HealthRex/harmdash was used as the canonical source. Repository state at time of inspection: commit 1096548112f3d95048becf1933b7289bd0aa9ef5.
+
+The canonical data file `data/metrics.csv` (218,318 bytes, 2,168 data rows excluding header) is in long format with the schema `Model, Team, Condition, Provider, Metric, mean, ci`. The unique values in the `Metric` column are exactly the twelve dashboard-facing metrics: Completeness, Escalation, F1, OverallScore, Precision, Recall, Restraint, Runtime, Safety, nnh_cumulative, normalized, pct_cumulative.
+
+No metric in the public file decomposes harmful errors by severity tier (mild, moderate, severe). The aggregate harm signal is captured by the `Safety` metric, which uses the (5,5) NOHARM weighting scheme already incorporated in `severity_weights.yaml::harm_cost_multipliers`.
+
+### Outcome
+
+The public NOHARM data does not directly support replacing the `anchored_severe_22_2_percent` approximation in `severity_weights.yaml` with empirically-derived per-error tier proportions. Decision B per the exploration brief: only aggregate harm metrics are exposed.
+
+### Resolution
+
+The current three-option sensitivity treatment in `severity_weights.yaml` (`severe_only`, `uniform_severe_moderate_mild`, `anchored_severe_22_2_percent`, all reported alongside in the OI Results section) is the documented end-state for v1 of the manuscript. The `planned_v2_extension` note in the YAML is updated to reference this exploration: a true per-tier decomposition would require either direct contact with the Wu et al. authors for access to the underlying annotation data, or republication of NOHARM Extended Data Table 4 if and when it becomes publicly available beyond the dashboard CSV. Neither pathway is in scope for the present manuscript.
+
+No code changes, no checksum changes, no plan version bump. The `severity_weights.yaml` is updated only in the comment text of `planned_v2_extension` to reflect the exploration outcome; this is a documentation-only change and does not affect the simulation output.
+
+### Files affected
+
+- `weights/severity_weights.yaml`: comment text in `planned_v2_extension` field updated; no value changes.
+- `DEVIATIONS.md`: this entry added.
+
+### Verification
+
+Run `git diff weights/severity_weights.yaml` to confirm only comment text changed. Run `python -m idc_simulation all` and confirm the blessed checksums (`787e51befaf5...` for contamination, `df83dfe4c558...` for severity_weighted) are unchanged.
+
+---
+
 ## Resolved deviations (folded into plan v1.2)
 
 The two entries below were originally raised against plan v1.1 during the
