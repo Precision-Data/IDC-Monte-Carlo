@@ -1,0 +1,84 @@
+# IDC Monte Carlo - Pessimistic prior set
+# Authoritative source: ANALYSIS_PLAN.md Section 4.
+# Every (alpha, beta) value below is copied verbatim from the plan tables.
+
+name: pessimistic
+plan_section: "4"
+plan_version: "1.1"
+description: >
+  Pessimistic prior set. Reflects high-load deployment contexts:
+  longer context windows, complex documentation tasks, high-volume
+  documentation pressure with cognitive surrender at scale, high-bloat
+  copy-forward environments, and absence of amendment infrastructure.
+
+parameters:
+  E0:
+    description: "Initial confabulation rate (per AI-generated claim)."
+    mean: 0.0500
+    precision: 200
+    alpha: 10.0
+    beta: 190.0
+    ci_95_plan: [0.0250, 0.0837]
+    citation: >
+      Anchored by Omar M et al. (Lancet Digital Health 2026) 46.1%
+      susceptibility in clinical-prose format and rates approaching 5%
+      observed in non-clinical evaluations of long-context tasks.
+    plan_subsection: "4.1"
+
+  epsilon:
+    description: >
+      Entrenchment rate. Pessimistic case reflects high-volume
+      documentation pressure with cognitive surrender at scale.
+    mean: 0.55
+    precision: 20
+    alpha: 11.0
+    beta: 9.0
+    ci_95_plan: [0.331, 0.760]
+    citation: >
+      No direct measurement available. Indirect anchors as for the
+      moderate set; pessimistic prior reflects Shaw & Nave (2026)
+      cognitive surrender at scale.
+    plan_subsection: "4.2"
+
+  P:
+    description: >
+      Per-encounter propagation factor. Pessimistic case approaches the
+      Wang et al. (2017) UCSF 46% copy + 36% imported figures and the
+      multi-agent-adjusted propagation implied by Mazur and Jeong.
+    mean: 0.70
+    precision: 25
+    alpha: 17.5
+    beta: 7.5
+    ci_95_plan: [0.506, 0.856]
+    citation: >
+      Wang MD, Khanna R, Najafi N. JAMA Internal Medicine 177(8),
+      1212-1213 (2017). DOI: 10.1001/jamainternmed.2017.1548.
+      Supporting (multi-agent extension): Mazur 2026; Jeong et al. 2026.
+    plan_subsection: "4.3"
+
+  R:
+    description: >
+      Per-encounter de-entrenchment rate. Pessimistic case reflects
+      environments without note-amendment infrastructure.
+    mean: 0.005
+    precision: 200
+    alpha: 1.0
+    beta: 199.0
+    ci_95_plan: [0.0002, 0.025]
+    citation: >
+      No direct measurement available. Tsou AY et al. (Appl Clin Inform
+      2017) note that "systems for checking the accuracy of notes are
+      almost nonexistent."
+    plan_subsection: "4.4"
+
+# Omission-adjusted epsilon (Section 4.2, error-type asymmetry).
+omission_adjustments:
+  epsilon:
+    description: >
+      Entrenchment rate for OMISSION errors under the pessimistic prior
+      set.
+    mean: 0.75            # 0.55 + 0.20
+    precision: 20         # preserved from base epsilon
+    alpha: 15.0
+    beta: 5.0
+    rationale: "mu shifted by +0.20 per Section 4.2; precision preserved."

@@ -1,0 +1,82 @@
+# IDC Monte Carlo - Optimistic prior set
+# Authoritative source: ANALYSIS_PLAN.md Section 4.
+# Every (alpha, beta) value below is copied verbatim from the plan tables.
+
+name: optimistic
+plan_section: "4"
+plan_version: "1.1"
+description: >
+  Optimistic prior set. Centred on best-evidence point estimates with
+  high precision. Jointly produces the lowest contamination distribution.
+
+parameters:
+  E0:
+    description: "Initial confabulation rate (per AI-generated claim)."
+    mean: 0.0147
+    precision: 1000
+    alpha: 14.7
+    beta: 985.3
+    ci_95_plan: [0.0080, 0.0234]
+    citation: >
+      Asgari E, Montana-Brown N, Dubois M, et al. A framework to assess
+      clinical safety and hallucination rates of LLMs for medical text
+      summarisation. npj Digital Medicine 8, 274 (2025).
+      DOI: 10.1038/s41746-025-01670-7. Centred on 1.47% point estimate
+      from N=12,999 clinician-annotated clinical sentences.
+    plan_subsection: "4.1"
+
+  epsilon:
+    description: >
+      Entrenchment rate. Optimistic case reflects effective targeted
+      review in low-volume settings.
+    mean: 0.10
+    precision: 50
+    alpha: 5.0
+    beta: 45.0
+    ci_95_plan: [0.034, 0.205]
+    citation: >
+      No direct measurement available. Indirect anchors as for the
+      moderate set; optimistic prior assumes effective review processes.
+    plan_subsection: "4.2"
+
+  P:
+    description: >
+      Per-encounter propagation factor. Optimistic case approaches the
+      Steinkamp et al. (2022) 16% inpatient medicine copy rate.
+    mean: 0.30
+    precision: 25
+    alpha: 7.5
+    beta: 17.5
+    ci_95_plan: [0.144, 0.494]
+    citation: >
+      Steinkamp J, Kantrowitz JJ, Airan-Javia S. A Practical Approach for
+      Monitoring the Use of Copy-Paste in Clinical Notes. Appl Clin
+      Inform 13(1), 88-95 (2022). PMC8861699.
+    plan_subsection: "4.3"
+
+  R:
+    description: >
+      Per-encounter de-entrenchment rate. Optimistic case reflects
+      environments with active patient-reported error correction
+      (Bell 2020).
+    mean: 0.05
+    precision: 50
+    alpha: 2.5
+    beta: 47.5
+    ci_95_plan: [0.008, 0.123]
+    citation: >
+      Bell SK, Delbanco T, Elmore JG, et al. Frequency and types of
+      patient-reported errors in electronic health record ambulatory
+      care notes. JAMA Network Open 3, e205867 (2020). PMC7284300.
+    plan_subsection: "4.4"
+
+# Omission-adjusted epsilon (Section 4.2, error-type asymmetry).
+omission_adjustments:
+  epsilon:
+    description: >
+      Entrenchment rate for OMISSION errors under the optimistic prior set.
+    mean: 0.30            # 0.10 + 0.20
+    precision: 50         # preserved from base epsilon
+    alpha: 15.0
+    beta: 35.0
+    rationale: "mu shifted by +0.20 per Section 4.2; precision preserved."

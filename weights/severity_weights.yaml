@@ -1,0 +1,44 @@
+# NOHARM severity tier weights
+# Reference: ANALYSIS_PLAN.md Section 6.4.
+#
+# Status (v1.0 of the simulation): UNAVAILABLE.
+#
+# Justification:
+#   The plan requires that NOHARM severity tier weights be sourced from
+#   Wu D, Nateghi Haredasht F, Maharaj SK, et al. "First, do NOHARM:
+#   towards clinically safe large language models." Preprint at
+#   arXiv:2512.01241 (2025). Each weight must be traceable to a line in
+#   that paper. As of plan v1.1 issuance, the per-tier proportions in
+#   the form required for weighting have not been extracted in a
+#   citation-anchored manner.
+#
+#   Per the plan: "Under no circumstances are weights chosen by
+#   judgement to fill the gap." The severity-weighted analysis (Section
+#   7.3 and Table 3 of the manuscript) is therefore reported as a
+#   planned-but-unsupported extension and is NOT computed in v1.0 of the
+#   simulation.
+#
+# How the simulation reads this file:
+#   When `enabled: false`, the analysis pipeline skips Section 7.3 and
+#   records the omission in the run log. Re-enabling severity weighting
+#   requires:
+#     1. Populating the `tiers:` mapping below with weights traceable to
+#        specific lines/tables in Wu et al. 2025.
+#     2. Setting `enabled: true`.
+#     3. Logging the change in DEVIATIONS.md if it occurs after the
+#        principal simulation run, AND bumping the plan version.
+
+enabled: false
+status: "unsupported_in_v1.0"
+source:
+  citation: >
+    Wu D, Nateghi Haredasht F, Maharaj SK, et al. First, do NOHARM:
+    towards clinically safe large language models. Preprint at
+    arXiv:2512.01241 (2025).
+  url: "https://arxiv.org/abs/2512.01241"
+  extracted: false
+  extracted_by: null
+  extracted_on: null
+
+# Tier mapping is intentionally empty until Wu et al. extraction is done.
+tiers: {}
