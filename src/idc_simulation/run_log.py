@@ -115,6 +115,39 @@ def sha256_file(path: str | Path) -> str:
     return h.hexdigest()
 
 
+def sha256_dataframe_content(
+    parquet_path: str | Path,
+    *,
+    sort_keys: tuple[str, ...] = (
+        "prior_set",
+        "error_type",
+        "sample_index",
+        "horizon",
+    ),
+    float_precision: int = 15,
+) -> str:
+    """Return a platform-invariant SHA256 over the contents of a Parquet file.
+
+    Reads the file with pandas, sorts by the supplied keys for stable
+    row order, formats every float column with ``float_precision`` digits
+    of significand, and serialises to CSV with a newline-only line
+    terminator. The resulting byte stream depends only on the data
+    values, not on Parquet metadata, dictionary encoding, compression,
+    or platform-specific writer state. Suitable for CI reproducibility
+    checks that need to compare numerical output across operating
+    systems and CPU architectures.
+    """
+    import pandas as pd  # local import to keep run_log import-light
+
+    df = pd.read_parquet(parquet_path)
+    df = df.sort_values(list(sort_keys)).reset_index(drop=True)
+    fmt = f"%.{float_precision}g"
+    csv_bytes = df.to_csv(index=False, lineterminator="\n", float_format=fmt).encode(
+        "utf-8"
+    )
+    return hashlib.sha256(csv_bytes).hexdigest()
+
+
 def create_run_log(
     *,
     seed: int,

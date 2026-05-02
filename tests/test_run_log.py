@@ -16,6 +16,7 @@ from idc_simulation.run_log import (
     TRACKED_DEPENDENCIES,
     attach_output_file,
     create_run_log,
+    sha256_dataframe_content,
     sha256_file,
     write_run_log,
 )
@@ -121,6 +122,47 @@ def test_attach_missing_file_raises(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 # Persistence
 # ---------------------------------------------------------------------------
+
+
+def test_content_hash_invariant_to_row_order(tmp_path: Path) -> None:
+    """Content hash is computed after canonical sort, so row-order
+    permutations of the same Parquet should hash identically.
+    """
+    import pandas as pd
+
+    df = pd.DataFrame(
+        {
+            "prior_set": ["a", "a", "b", "b"],
+            "error_type": ["x", "y", "x", "y"],
+            "sample_index": [0, 1, 0, 1],
+            "horizon": [1, 1, 1, 1],
+            "value": [0.1, 0.2, 0.3, 0.4],
+        }
+    )
+    p1 = tmp_path / "ordered.parquet"
+    p2 = tmp_path / "shuffled.parquet"
+    df.to_parquet(p1)
+    df.iloc[[2, 0, 3, 1]].to_parquet(p2)
+    assert sha256_dataframe_content(p1) == sha256_dataframe_content(p2)
+
+
+def test_content_hash_changes_with_data(tmp_path: Path) -> None:
+    import pandas as pd
+
+    df = pd.DataFrame(
+        {
+            "prior_set": ["a"],
+            "error_type": ["x"],
+            "sample_index": [0],
+            "horizon": [1],
+            "value": [0.1],
+        }
+    )
+    p1 = tmp_path / "v1.parquet"
+    p2 = tmp_path / "v2.parquet"
+    df.to_parquet(p1)
+    df.assign(value=[0.2]).to_parquet(p2)
+    assert sha256_dataframe_content(p1) != sha256_dataframe_content(p2)
 
 
 def test_write_run_log_round_trip(tmp_path: Path) -> None:
