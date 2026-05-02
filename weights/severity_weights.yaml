@@ -147,8 +147,20 @@ tier_distribution_options:
         77.8% is split evenly between mild and moderate as a noncommittal
         choice in the absence of direct extraction.
       planned_v2_extension: >
-        Retrieve Extended Data Table 4 from Wu et al. and replace this block
-        with the empirically derived per-error tier distribution.
+        On 2026-05-02 we attempted to retrieve empirical per-error tier
+        proportions from the public NOHARM dashboard data
+        (https://github.com/HealthRex/harmdash, commit 1096548,
+        data/metrics.csv). The file exposes only twelve aggregate
+        dashboard-facing metrics (Completeness, Escalation, F1, OverallScore,
+        Precision, Recall, Restraint, Runtime, Safety, nnh_cumulative,
+        normalized, pct_cumulative) without per-tier decomposition of harmful
+        errors. The Safety metric is itself severity-weighted using the (5,5)
+        scheme this YAML adopts, but the underlying per-tier counts are not
+        publicly released through this channel. A direct empirical per-error
+        tier distribution would require either author-mediated access to the
+        underlying NOHARM annotation data or future publication of Extended
+        Data Table 4 in a form that decomposes harmful errors by tier.
+        Documented in DEVIATIONS.md entry dated 2026-05-02.
 
 # -----------------------------------------------------------------------------
 # Type distribution: probability of omission vs commission for severely
