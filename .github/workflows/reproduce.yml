@@ -33,9 +33,9 @@ jobs:
       - name: Run test suite
         run: pytest -v
 
-      - name: Run principal simulation
+      - name: Run principal simulation + analysis pipeline
         run: |
-          python -m idc_simulation run \
+          python -m idc_simulation all \
             --priors-dir priors \
             --weights-path weights/severity_weights.yaml \
             --output-dir outputs \

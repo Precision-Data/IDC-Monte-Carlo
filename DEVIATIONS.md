@@ -15,7 +15,53 @@ Each entry MUST contain:
 
 ## Open deviations
 
-<!-- No open deviations recorded. -->
+### 2026-05-02 - Severity weighting gate flipped to enabled
+
+**Plan section / pre-specified analysis affected:**
+Section 6.4 (severity weighting source) and Section 7.3 (severity-
+weighted contamination). In v1.0 of the simulation the gate was held
+closed pending citation-anchored extraction of the NOHARM tier
+proportions. With plan v1.2 and `weights/severity_weights.yaml` v1.0,
+the gate is now open and Section 7.3 outputs ship in the principal
+analysis.
+
+**Substitute analysis or change made:**
+- `enabled: true` in `weights/severity_weights.yaml`.
+- Harm cost multipliers from the NOHARM (5,5) scheme
+  (Mild = 1, Moderate = 5, Severe = 25), each with a verbatim
+  provenance quote from Wu et al. 2025 Methods.
+- Three tier distribution options are reported jointly as a
+  sensitivity range:
+    1. `anchored_severe_22_2_percent` (primary): uses the per-case
+       22.2% severe-harm rate from Wu et al. abstract / Results p. 7
+       as P(severe | error), with the remaining 77.8% split evenly
+       between mild and moderate.
+    2. `severe_only`: conservative upper bound (P(severe) = 1).
+    3. `uniform_severe_moderate_mild`: flat agnostic prior (1/3 each).
+- Type decomposition uses `type_distribution_severe`
+  (76.6% omission per Fig. 5a / Results p. 10).
+- Section 7.3 outputs ship as `outputs/severity_weighted.parquet`
+  (source of truth) and `outputs/tables/severity_weighted.csv`
+  (manuscript Table 3, formatted to six significant figures per
+  Section 6.3 precision).
+
+**Reason for the deviation:**
+The 22.2% NOHARM severe-harm rate is a per-case rate, not a per-error
+proportion. Using it directly as P(severe | error) is an explicit
+approximation, not a measurement. The plan's no-judgement rule
+requires this be flagged (it is, in `severity_weights.yaml` and in the
+manuscript Results section) and that alternative options be reported
+alongside (`severe_only` and `uniform_severe_moderate_mild`).
+
+**Planned v2.0 extension:**
+Retrieve Extended Data Table 4 from Wu et al. (not present in the
+arXiv PDF body; planned via direct outreach or supplementary archive
+access) and replace `anchored_severe_22_2_percent` with the empirical
+per-error tier distribution. This will retire the present approximation
+and may require a `severity_weights.yaml` v2.0 + plan v1.3 bump.
+
+**Plan version bump:** v1.1 -> v1.2 (Sections 6.4 and 7.3 reactivated;
+no edits to the plan body required).
 
 ---
 

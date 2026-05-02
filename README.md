@@ -13,11 +13,15 @@ commission and omission errors.
 
 ## Status
 
-Implements analysis plan v1.2 ([ANALYSIS_PLAN.md](ANALYSIS_PLAN.md)). The
-two methodological clarifications surfaced during the first principal
-simulation run on 2026-05-02 (convergence criterion, cross-platform
-reproducibility target) are now folded into Sections 5.3 and 6.3 of the
-plan; their original deviation entries are retained for audit in
+Implements analysis plan v1.2 ([ANALYSIS_PLAN.md](ANALYSIS_PLAN.md)).
+Severity weighting is enabled per `weights/severity_weights.yaml`
+(NOHARM (5,5) scheme, citation-anchored to Wu et al. arXiv:2512.01241).
+Three tier distribution options are reported as a sensitivity range; the
+primary is `anchored_severe_22_2_percent`. The two methodological
+clarifications surfaced during the first principal run (Section 5.3
+convergence criterion, Section 6.3 cross-platform reproducibility
+target) are folded into the plan body; their original deviation entries
+plus the severity-weighting activation are retained for audit in
 [DEVIATIONS.md](DEVIATIONS.md).
 
 ## How to run
@@ -44,17 +48,24 @@ artefacts derive from this file.
 
 `outputs/tables/` contains the Section 7 tables in CSV/JSON form
 (table1_primary_summary, table_hospital_scale, robustness_summary,
-severity_weighting_status). `outputs/figures/` contains the
-manuscript figures at 300 dpi. `runs/` holds a structured JSON run log
-per simulation invocation, recording the seed, K, dependency versions,
-git commit, and the SHA256 of every output file produced.
+severity_weighting_status, severity_weighted). `outputs/figures/`
+contains the manuscript figures at 300 dpi.
+`outputs/severity_weighted.parquet` is the source-of-truth table for
+the Section 7.3 severity-weighted analysis (one row per
+prior_set x horizon x tier_option). `runs/` holds a structured JSON
+run log per simulation invocation, recording the seed, K, dependency
+versions, git commit, and the SHA256 of every output file produced.
 
 ## Reproducibility
 
-Same seed produces bit-identical Parquet output (verified by SHA256). The
-GitHub Actions workflow `.github/workflows/reproduce.yml` regenerates the
-principal-seed output on every push to `main` and verifies its hash against
-[outputs/checksums.txt](outputs/checksums.txt); divergence fails the build.
+Same seed produces stable per-cell summary statistics across CPU
+architectures (cross-platform reproducibility target per plan v1.2
+Section 6.3). Two blessed checksums live in
+[outputs/checksums.txt](outputs/checksums.txt): one over the canonical
+contamination output's per-cell summary vector, one over the
+severity-weighted summary table. The GitHub Actions workflow
+`.github/workflows/reproduce.yml` regenerates both on every push to
+`main` and fails the build on any divergence.
 
 ## Citation
 

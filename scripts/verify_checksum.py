@@ -27,6 +27,7 @@ if str(_SRC) not in sys.path:
 
 from idc_simulation.run_log import (  # noqa: E402
     sha256_cell_summaries,
+    sha256_dataframe_content,
     sha256_file,
 )
 
@@ -35,10 +36,23 @@ OUTPUTS_DIR = Path("outputs")
 
 
 def _hash_for(path: Path) -> str:
-    # Parquet outputs are checksummed via the per-cell summary hash so
-    # the verification is stable across CPU architectures (macOS arm64
-    # vs Linux x86_64 differ in sub-ULP bits of numpy's Beta sampler).
+    # Parquet outputs are dispatched by filename. Each is hashed via the
+    # most cross-platform-stable function for its content shape.
+    name = path.name
+    if name == "severity_weighted.parquet":
+        # Already-aggregated summary table; hash with 6-sig-fig CSV
+        # canonicalisation per plan Section 6.3.
+        return sha256_dataframe_content(
+            path,
+            sort_keys=("prior_set", "horizon", "tier_option"),
+            float_precision=6,
+        )
+    if name.startswith("contamination_seed") and name.endswith(".parquet"):
+        # Raw per-sample data; aggregate to per-cell summary vector and
+        # hash that (averages out sub-ULP RNG differences across CPUs).
+        return sha256_cell_summaries(path)
     if path.suffix == ".parquet":
+        # Defensive default for any future Parquet output.
         return sha256_cell_summaries(path)
     return sha256_file(path)
 

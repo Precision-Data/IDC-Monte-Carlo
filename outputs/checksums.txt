@@ -1,34 +1,36 @@
-# Blessed checksum for the canonical principal-seed simulation output.
+# Blessed checksums for the canonical principal-seed simulation outputs.
 #
 # Format: '<sha256>  <filename>' (one entry per line, '#' lines ignored).
-#
 # The CI workflow (.github/workflows/reproduce.yml) verifies that a
-# clean build reproduces this exact value. Any divergence fails the
+# clean build reproduces these exact values. Any divergence fails the
 # build.
 #
-# IMPORTANT: For .parquet files the recorded SHA256 is computed over
-# the per-cell summary statistics (median, mean, p5, p95,
-# Pr[contamination > 0.01]) rounded to 6 significant figures, NOT
-# over the raw Parquet bytes nor the per-sample CSV. The reasons:
+# Two .parquet entries are tracked:
 #
-#   1. PyArrow Parquet bytes diverge across CPU architectures even
-#      for bit-identical input (different dictionary encoding /
-#      writer metadata between macOS arm64 and Linux x86_64).
-#   2. NumPy's Generator.beta is also not bit-identical across CPU
-#      architectures: it agrees in the leading ~13-14 decimal digits
-#      but differs in the lowest bits.
-#   3. Aggregating K = 10,000 samples per cell averages out those
-#      sub-ULP differences. Summary statistics rounded to 6 sig figs
-#      are stable across platforms AND are exactly the quantities
-#      reported in the Section 7.1 manuscript tables.
+# 1) contamination_seed20260502_K10000.parquet
+#    The canonical raw simulation output: K=10,000 joint Beta samples per
+#    prior set, evaluated at every horizon, both error types, written
+#    long-format. SHA256 is computed over the per-cell summary statistic
+#    vector (median, mean, p5, p95, Pr[contamination > 0.01]) per
+#    (prior_set, error_type, horizon), rounded to 6 significant figures
+#    -- the cross-platform-stable target specified in plan v1.2 Section 6.3.
+#    See `idc_simulation.run_log.sha256_cell_summaries` for the
+#    canonicalisation.
 #
-# See `idc_simulation.run_log.sha256_cell_summaries` for the exact
-# canonicalisation.
+# 2) severity_weighted.parquet
+#    The Section 7.3 severity-weighted summary table produced by
+#    `severity_weighted_contamination()`: one row per (prior_set, horizon,
+#    tier_option), with median/mean/p5/p95/p_exceeds_threshold of severity-
+#    weighted contamination plus the p_omission/p_commission type-mixing
+#    weights. The table is already aggregated and is hashed via
+#    `sha256_dataframe_content` with sort_keys=(prior_set, horizon,
+#    tier_option) and float_precision=6.
 #
-# Generated with the plan defaults:
-#   K = 10000, seed = 20260502, plan_version = 1.1,
-#   priors = {optimistic, moderate, pessimistic}.
-# Confirmed identical across two consecutive runs on macOS arm64 +
-# Python 3.13.12 on 2026-05-02.
+# Both hashes were generated with the plan defaults (K=10000, seed=20260502,
+# plan_version=1.2, severity_weights.yaml v1.0 enabled with
+# anchored_severe_22_2_percent as the primary tier option). Confirmed
+# identical across two consecutive local runs on macOS arm64 + Python
+# 3.13.12 on 2026-05-02.
 
 787e51befaf5c4e17050c129ef59f17ac7673cdbb373c34053006d52000494ff  contamination_seed20260502_K10000.parquet
+df83dfe4c558ff1b292d01f9b9c10e7f57ba193ea0ce394172a59b7567821b92  severity_weighted.parquet
