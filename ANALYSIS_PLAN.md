@@ -1,4 +1,4 @@
-# IDC Monte Carlo Analysis Plan v1.2
+# IDC Monte Carlo Analysis Plan v2.0
 
 **Title:** Pre-specified analysis plan for the prior predictive simulation of the Iatrogenic Data Contamination (IDC) framework.
 
@@ -6,18 +6,20 @@
 
 **Repository:** https://github.com/Precision-Data/IDC-Monte-Carlo
 
-**Status:** v1.2, Issued after the first principal simulation run on 02 May 2026 by Claude Code in the IDC-Monte-Carlo repository (commit `main` head, 14 commits, CI green on macOS arm64 and Linux x86_64). The principal run produced a blessed reference output captured by the per-cell summary statistic hash specified in Section 6.3. This v1.2 absorbs two methodological clarifications surfaced during that run, both originally logged as deviations against v1.1 and now folded into the body of the plan for internal consistency.
+**Status:** v2.0, Major version bump. The framework's principal analysis has been restructured from a single-parameter-set Bayesian prior predictive across (E0, ε, P, R) to a two-regime comparison: an uncorrected regime (R = 0, the principal analysis) and a corrected regime (R drawn from a Beta prior, the counterfactual analysis). The methodological justification for the reframe is given in Section 3 (Hypotheses and claims) and is reproduced in the version history below. No simulation re-execution is required; the existing Monte Carlo output supports the new tabulation directly. The blessed checksums from v1.2.1 remain valid for the underlying parameter samples and contamination function evaluations; new tabulations and a new severity-weighted output file with the regime distinction will be generated as part of the implementation.
 
-**Associated manuscript:** A Bayesian Framework for Iatrogenic Data Contamination in AI-Augmented Healthcare Documentation (IDC_Framework_OI_v1_1, in preparation; target journal npj Digital Medicine).
+**Associated manuscript:** A Bayesian Framework for Iatrogenic Data Contamination in AI-Augmented Healthcare Documentation (IDC_Framework_OI_v1_2 in preparation; target journal npj Digital Medicine).
 
 **Companion manuscript:** Confabulation at Scale: An Architectural Problem in Healthcare AI (Confabulation_at_Scale_Perspective_v1_2, in preparation; target journal npj Digital Medicine).
 
-**Date issued:** [to be set on day of v1.2 deposit]
+**Date issued:** [to be set on day of v2.0 deposit]
 
 **Version history:**
 - v1.0: initial pre-specification of priors, simulation procedure, and reporting plan.
-- v1.1: Wang et al. JAMA Internal Medicine 2017 citation retraced to primary source (DOI: 10.1001/jamainternmed.2017.1548). Steinkamp et al. 2022 added as supporting evidence for the P prior, documenting cross-institutional variability in copy-forward rates. P prior justification widened to reflect this variability.
-- v1.2: Convergence criterion clarified to acknowledge that uniform 1% relative tolerance across all percentile-and-horizon cells is not achievable for deep-tail cells where the contamination value approaches the Monte Carlo noise floor. New criterion: 1.5% relative on medians, 2.5% relative on tails, with a 1e-4 absolute floor. Cross-platform reproducibility target clarified: byte-level checksums on Parquet outputs are not the target because Parquet writer outputs and NumPy Beta sampling both produce sub-ULP differences across CPU architectures. The reproducibility target is the per-cell summary statistic vector (median, mean, 5th percentile, 95th percentile, P[contamination > 0.01]) rounded to six significant figures, hashed as a single SHA256 over a canonicalised representation. Both clarifications were proposed by the implementation, accepted on methodological grounds, and absorbed into Sections 5.3 and 6.3.
+- v1.1: Wang et al. JAMA Internal Medicine 2017 citation retraced to primary source. Steinkamp et al. 2022 added as supporting evidence for the P prior.
+- v1.2: Convergence criterion clarified (1.5% medians, 2.5% tails, 1e-4 absolute floor). Cross-platform reproducibility target clarified (per-cell summary statistic SHA256 at 6 sig figs, not byte-level Parquet checksum).
+- v1.2.1: Two textual consistency fixes (Section 9 reproducibility wording; end-of-file marker).
+- v2.0: Principal analysis restructured to a two-regime comparison. Justification: R is not a property of the system but a parameter describing the existence of an external corrective process. At the deployment scale the framework describes ("at scale", per the title of the companion Perspective), an R > 0 prior implicitly assumes verification infrastructure that does not currently exist in healthcare AI: only 10% of health systems use automated monitoring (CHIME/Censinet), only 22% can produce a complete AI audit trail within 30 days (Black Book), and the NOHARM Discussion (Wu et al. 2025) is explicit that "continuous, case-by-case human oversight is neither scalable nor cognitively sustainable." Presenting R drawn from a Beta prior with mean 0.02 to 0.05 as the principal analysis would therefore implicitly assume the conclusion the framework is intended to support. v2.0 separates the uncorrected regime (R = 0) as the principal analysis describing the actual current state, from the corrected regime (R drawn from Beta priors specified in Section 4.4) as the counterfactual analysis describing what the framework predicts becomes possible under verification infrastructure. The contrast between the two regimes is the framework's principal contribution. No simulation re-execution required: existing Monte Carlo samples support both regime tabulations directly.
 
 ---
 
@@ -43,15 +45,43 @@ The motivation for pre-specification is threefold. First, Bayesian analyses are 
 
 ## 3. Hypotheses and claims
 
-This is not a frequentist hypothesis test. The simulation reports a prior predictive distribution. We pre-specify three claims that the simulation is intended to evaluate, each phrased as a quantitative prediction under the priors:
+This is not a frequentist hypothesis test. The simulation reports prior predictive distributions under two distinct regimes, defined in Section 3.1 below. The framework's principal quantitative claim is the contrast between the two regimes; sensitivity claims and decomposition claims are subsidiary.
 
-**Claim 1.** Under literature-anchored priors, cumulative contamination at the system level (100,000 documents per year, five-year horizon) has a non-trivial expected value in the moderate prior set, with the lower bound of the 90% prior credible interval substantially above zero.
+### 3.1 Regime definition
 
-**Claim 2.** The framework's predictions are sensitive but not catastrophically sensitive to prior choice: the ratio of the pessimistic 95th percentile to the optimistic 5th percentile is bounded.
+The IDC contamination function takes four parameters: E0 (initial confabulation rate), ε (entrenchment rate), P (per-encounter propagation factor), and R (per-encounter de-entrenchment rate). Of these, E0, ε, and P describe properties of the AI system and its deployment context. R describes the existence of an external corrective process: the probability that an entrenched confabulation is identified and removed at any subsequent encounter. R is therefore not a property of the system but a parameter describing the verification infrastructure layered on top of it.
 
-**Claim 3.** Decomposition by error type reveals divergent commission and omission contamination trajectories at long horizons, driven primarily by the parametric asymmetry in ε between the two error classes.
+We define two regimes:
 
-The pre-specified ratio thresholds for Claim 2 and the formal divergence criterion for Claim 3 are reported in Section 7 (Pre-specified analyses).
+**Uncorrected regime (R = 0).** No external corrective process is operating. Once a confabulation is entrenched, it persists and propagates without decay. The contamination function reduces to:
+
+Contamination(n) = E0 × ε × (1 − P^(n+1)) / (1 − P)
+
+This is the geometric compounding form of the framework, mathematically equivalent to a financial-mathematics compounding model.
+
+**Corrected regime (R ≥ 0, drawn from Beta prior).** An external corrective process operates at the per-encounter rate R, drawn from the Beta priors specified in Section 4.4. The full contamination function applies:
+
+Contamination(n) = E0 × ε × (1 − P^(n+1)) / (1 − P) × (1 − R)^n
+
+The (1 − R)^n term causes contamination to decline at long horizons. The corrected regime predicts a peak-and-decline trajectory; the uncorrected regime predicts monotonic accumulation toward the steady-state limit E0 × ε / (1 − P).
+
+### 3.2 Justification for treating uncorrected as the principal regime
+
+Survey evidence on the actual current state of healthcare AI deployment supports the uncorrected regime as the more accurate description of the deployment landscape the framework's title invokes ("at scale"). Specifically: only 10% of US health systems use automated monitoring (CHIME/Censinet 2025), only 22% can produce a complete AI audit trail within 30 days (Black Book 2025), and the NOHARM Discussion (Wu et al. 2025) is explicit that "continuous, case-by-case human oversight is neither scalable nor cognitively sustainable." Setting R > 0 as a principal analysis would implicitly assume verification infrastructure that does not currently exist for the majority of healthcare AI deployments. Such an assumption would also implicitly assume the conclusion the framework is intended to support, namely that external verification at the boundary between confabulation and entrenchment is the architectural intervention point that changes contamination dynamics. Treating R > 0 as a counterfactual rather than a baseline preserves the framework's analytical separation between what is happening now and what becomes possible under verification infrastructure.
+
+### 3.3 Pre-specified claims
+
+**Claim 1 (principal).** Under the uncorrected regime (R = 0) and literature-anchored priors on E0, ε, P, the cumulative contamination per single confabulation reaches non-trivial values across all three prior sets at clinically relevant horizons, with the moderate prior 90% credible interval lower bound substantially above zero at horizons n ∈ {5, 10, 20} and the pessimistic prior 95th percentile reaching values exceeding 1 (interpretation: a single confabulation produces more than one downstream contaminated document over time, by propagation through copy-forward and AI context conditioning).
+
+**Claim 2 (counterfactual contrast).** Under the corrected regime (R drawn from Beta priors specified in Section 4.4), contamination predictions diverge qualitatively from the uncorrected regime: contamination peaks in the medium term and declines at long horizons. The contrast between Claims 1 and 2 quantifies what verification infrastructure would change about the deployment landscape.
+
+**Claim 3 (sensitivity).** The framework's predictions are sensitive to prior choice within each regime. The ratio of the pessimistic 95th percentile to the optimistic 5th percentile at the principal horizon (n = 10) is reported as a single robustness summary; pre-specified threshold for "framework is robust to literature interpretation" is a ratio less than 25; a ratio above 50 is reported as meaningfully sensitive. The framework's interpretation language must be calibrated to the observed sensitivity: claims must take the form "the framework predicts contamination across the range X to Y depending on which interpretation of the literature is adopted," rather than committing to a single point estimate.
+
+**Claim 4 (type decomposition).** Decomposition by error type reveals divergent commission and omission contamination trajectories at long horizons, driven primarily by the parametric asymmetry in ε between the two error classes (omission ε approaches 1 because physician review cannot detect absent content without independent re-derivation).
+
+### 3.4 What this plan does not claim
+
+This plan does not claim that the corrected regime parameters R drawn from the Beta priors describe a particular verification system. The corrected regime is a counterfactual quantification of what the framework predicts under generic external correction at the rate R. The framework is silent on the specific implementation of the corrective process. Claims about specific verification systems are out of scope for this analysis plan and for the associated Original Investigation.
 
 ## 4. Parameter priors
 
@@ -137,7 +167,7 @@ Each parameter is given a Beta(α, β) prior, parameterised by mean μ and preci
 - Tsou AY et al. (op. cit.). Systematic review notes that "systems for checking the accuracy of notes are almost nonexistent."
 - Fischer AC et al. Transcription error rates in retrospective chart reviews. J Surg Orthop Adv (2020). 9.19% transcription error rate detected on retrospective audit of orthopedic records.
 
-**Priors specified:**
+**Priors specified (corrected regime only):**
 
 | Prior | μ | κ | α | β | 95% credible interval (approx.) |
 |---|---|---|---|---|---|
@@ -145,11 +175,15 @@ Each parameter is given a Beta(α, β) prior, parameterised by mean μ and preci
 | Moderate | 0.02 | 100 | 2.0 | 98.0 | [0.003, 0.057] |
 | Pessimistic | 0.005 | 200 | 1.0 | 199.0 | [0.0002, 0.025] |
 
-**Justification.** No study directly measures R under AI-augmented clinical workflows. The CHIME/Censinet survey finding that <10% of health systems use automated monitoring and the Tsou observation that systematic note accuracy checks are nearly absent constrain R to small values. The optimistic prior reflects environments with active patient-reported error correction (Bell 2020 detected up to 21% of records contained errors patients flagged, but only a small fraction were ultimately corrected through formal amendment processes); the pessimistic prior reflects environments without amendment infrastructure.
+**Principal regime: R = 0 (uncorrected).** As specified in Section 3.1, the principal analysis fixes R = 0. No prior is sampled for R in the principal analysis. The contamination function reduces to the geometric compounding form Contamination(n) = E0 × ε × (1 − P^(n+1)) / (1 − P).
 
-**Explicit caveat: directionality.** Note the direction: the "optimistic" prior (μ = 0.05) is the highest correction rate (best for the clinical record); the "pessimistic" prior (μ = 0.005) is the lowest. This is opposite to the directionality of E0, ε, and P, where higher means more contamination. This is intentional and consistent with the framework: the contamination function multiplies by (1−R)^n, so higher R reduces cumulative contamination. The optimistic prior set across all four parameters jointly produces the lowest contamination.
+**Counterfactual regime: R drawn from Beta priors above.** The counterfactual analysis samples R from the Beta priors specified in the table above, in joint draws with E0, ε, P from their respective priors. The counterfactual analysis quantifies what the framework predicts becomes possible under verification infrastructure.
 
-**Honest open item.** R is the parameter with the weakest empirical anchor in the framework. The pre-specified sensitivity analysis includes R = 0 (no correction) as an explicit boundary case.
+**Justification of priors for the counterfactual regime.** No study directly measures R under AI-augmented clinical workflows. The CHIME/Censinet survey finding that fewer than 10% of US health systems use automated monitoring and the Tsou observation that systematic note accuracy checks are nearly absent constrain R to small values. The optimistic prior (μ = 0.05) reflects environments with active patient-reported error correction (Bell 2020 detected up to 21% of records contained errors patients flagged, though only a small fraction were corrected through formal amendment processes); the pessimistic prior (μ = 0.005) reflects environments with minimal amendment infrastructure. Note that even the counterfactual optimistic prior is small in absolute terms (R = 0.05 means a 5% per-encounter chance that an entrenched confabulation is corrected). The counterfactual is not a future utopia; it is a small-but-nonzero correction rate compared to the principal regime's R = 0.
+
+**Explicit caveat: directionality.** The "optimistic" prior on R (μ = 0.05) is the highest correction rate (best for the clinical record); the "pessimistic" prior on R (μ = 0.005) is the lowest. This is opposite to the directionality of E0, ε, and P, where higher means more contamination. This is intentional and consistent with the framework: the contamination function multiplies by (1 − R)^n, so higher R reduces cumulative contamination. The optimistic prior set across all four parameters jointly produces the lowest contamination in the counterfactual regime.
+
+**Honest open item.** R is the parameter with the weakest empirical anchor in the framework. The two-regime structure of v2.0 is partly a response to this: by separating R = 0 (the principal analysis) from R sampled from Beta priors (the counterfactual), the framework's principal claim does not depend on the disputable R prior. The IHID validation study is the planned remedy for tightening the corrected-regime priors specifically.
 
 ### 4.5 Joint prior assumption
 
@@ -159,15 +193,31 @@ All four parameter priors are sampled independently. This independence assumptio
 
 ### 5.1 Algorithm
 
+The simulation produces both regimes from the same parameter samples. R is drawn from its Beta prior (Section 4.4) for the corrected regime; R = 0 is fixed for the uncorrected regime. E0, ε, P are sampled identically across both regimes for direct comparability.
+
 For each of three prior sets (optimistic, moderate, pessimistic):
 
-1. Draw K = 10,000 joint samples (E0_k, ε_k, P_k, R_k) independently from the corresponding Beta priors, using a fixed random seed (see Section 5.3).
-2. For each sample k and each pre-specified horizon n ∈ {1, 5, 10, 20, ∞}, evaluate the contamination function:
-   Contamination_k(n) = E0_k × ε_k × (1 − P_k^(n+1)) / (1 − P_k) × (1 − R_k)^n
-3. For the steady-state limit (n → ∞), use the closed form Contamination_∞ = E0_k × ε_k / (1 − P_k) × lim of (1 − R_k)^n. For R_k > 0 and P_k < 1 the limit is zero; the steady-state quantity reported is the maximum over n of the per-confabulation contamination, identified per sample.
-4. Repeat the entire procedure with omission-adjusted ε priors to produce the type-decomposed contamination distributions.
-5. Apply NOHARM severity tier weighting (Section 6.4) to produce severity-weighted contamination distributions.
+1. Draw K = 10,000 joint samples (E0_k, ε_k, P_k, R_k) independently from the corresponding Beta priors, using a fixed random seed (see Section 5.3). The R_k values are used in the corrected regime; the uncorrected regime fixes R_k = 0 for every sample.
+
+2. For each sample k and each pre-specified horizon n ∈ {1, 5, 10, 20, ∞}, evaluate the contamination function under both regimes:
+
+   Uncorrected: Contamination_uncorrected_k(n) = E0_k × ε_k × (1 − P_k^(n+1)) / (1 − P_k)
+
+   Corrected: Contamination_corrected_k(n) = E0_k × ε_k × (1 − P_k^(n+1)) / (1 − P_k) × (1 − R_k)^n
+
+3. For the steady-state limit (n → ∞):
+
+   Uncorrected steady state: Contamination_uncorrected_∞ = E0_k × ε_k / (1 − P_k). This is the geometric series limit and is the framework's principal long-run prediction in the absence of correction.
+
+   Corrected steady state: lim n → ∞ of (1 − R_k)^n = 0 for R_k > 0 and P_k < 1, so the corrected regime steady state is zero. The reportable corrected-regime quantity at long horizons is the maximum-over-n per-confabulation contamination, identified per sample, which captures the peak-and-decline trajectory described in Section 3.1.
+
+4. Repeat the entire procedure with omission-adjusted ε priors to produce the type-decomposed contamination distributions (under both regimes).
+
+5. Apply NOHARM severity tier weighting (Section 6.4) to produce severity-weighted contamination distributions (under both regimes).
+
 6. Compute summary statistics (Section 7).
+
+The algorithm change from v1.2.1 is that step 2 now produces two contamination values per sample rather than one. The underlying Monte Carlo samples are unchanged; the (1 − R_k)^n term is simply skipped in the uncorrected branch. No new sampling is required, no new convergence verification is required for the parameter draws (which are identical to v1.2.1), but a new convergence verification is required for the regime-conditional summary statistics on the larger output.
 
 ### 5.2 Software environment
 
@@ -239,38 +289,47 @@ If the Wu et al. paper does not report the proportions in a form usable for seve
 
 ## 7. Pre-specified analyses and reporting
 
-### 7.1 Primary analyses
+### 7.1 Primary analyses (regime-stratified)
 
-For each prior set and each horizon n ∈ {1, 5, 10, 20}:
+The primary analyses are reported separately for the uncorrected regime (principal) and the corrected regime (counterfactual), as defined in Section 3.1. For each regime, each prior set, and each horizon n ∈ {1, 5, 10, 20}:
 - Median, mean, 5th percentile, 95th percentile of per-confabulation Contamination(n).
 - 90% prior credible interval [5th, 95th].
 - Probability that Contamination(n) exceeds 0.01 (one contaminated downstream document per 100 confabulations introduced).
 
-Reported in Table 1 of the Original Investigation Results section.
+Reported in Table 1 of the Original Investigation Results section, with the uncorrected regime as the primary panel and the corrected regime as the counterfactual panel beneath it. The regime contrast is the framework's principal quantitative result.
 
-### 7.2 Type decomposition
+### 7.2 Regime contrast statistic
 
-All primary analyses are also computed separately for commission and omission errors using the omission-adjusted ε priors. Reported in Table 2.
+For each prior set and each horizon n ∈ {1, 5, 10, 20}, report the ratio:
 
-### 7.3 Severity weighting
+regime_contrast(prior_set, n) = median(Contamination_uncorrected) / median(Contamination_corrected)
 
-Severity-weighted contamination using NOHARM tier weights, conditional on the severity_weights.yaml resolution under Section 6.4. Reported in Table 3 if computed.
+This single statistic quantifies how much external correction at the corrected-regime rate would reduce contamination relative to the uncorrected baseline. A ratio of 1.0 indicates no benefit from correction; a ratio greater than 1.0 indicates correction reduces contamination; a ratio that grows with horizon n indicates the benefit of correction compounds over time. Reported as a separate column or panel of Table 1.
 
-### 7.4 Sensitivity analyses
+### 7.3 Type decomposition
+
+All primary analyses are also computed separately for commission and omission errors using the omission-adjusted ε priors, under both regimes. Reported in Table 2.
+
+### 7.4 Severity weighting
+
+Severity-weighted contamination using NOHARM tier weights, computed for both regimes per the severity_weights.yaml specification (Section 6.4). Reported in Table 3.
+
+### 7.5 Sensitivity analyses
 
 Pre-specified:
-- R = 0 (no correction) as a boundary case under the moderate prior set for E0, ε, P.
-- Independence assumption stress-test: ρ = 0.4 correlation between E0 and ε via Gaussian copula, moderate prior set, otherwise unchanged.
-- Multi-agent adjustment: P prior shifted to a multi-agent-adjusted P̃ specified at μ = 0.65, κ = 25, with the same E0, ε, R priors. Reported as a separate scenario in the multi-agent extension subsection.
-- Robustness summary statistic: ratio of pessimistic 95th percentile (across all parameters jointly) to optimistic 5th percentile (across all parameters jointly) at horizon n = 10. The pre-specified threshold for "framework is robust to literature interpretation" is a ratio less than 25; a ratio above 50 will be reported as a meaningful sensitivity to prior specification.
+- Independence assumption stress-test: ρ = 0.4 correlation between E0 and ε via Gaussian copula, moderate prior set, otherwise unchanged. Reported under both regimes.
+- Multi-agent adjustment: P prior shifted to a multi-agent-adjusted P̃ specified at μ = 0.65, κ = 25, with the same E0, ε, R priors. Reported under both regimes as a separate scenario in the multi-agent extension subsection.
+- Robustness summary statistic: ratio of pessimistic 95th percentile (across all parameters jointly) to optimistic 5th percentile (across all parameters jointly) at horizon n = 10, computed separately for each regime. The pre-specified threshold for "framework is robust to literature interpretation" within a regime is a ratio less than 25; a ratio above 50 is reported as meaningful sensitivity to prior specification.
 
-### 7.5 Hospital-scale illustration
+The R = 0 boundary case is no longer a sensitivity analysis in v2.0; it is the principal regime.
 
-For each prior set and the moderate horizon (n = 10, approximately 2.5 years at four encounters per patient per year), report median and 90% prior credible interval contaminated documents at the notional 100,000-documents-per-year, five-year hospital scale.
+### 7.6 Hospital-scale illustration
 
-### 7.6 What is exploratory
+For each prior set, each regime, and the moderate horizon (n = 10, approximately 2.5 years at four encounters per patient per year), report median and 90% prior credible interval contaminated documents at the notional 100,000-documents-per-year, five-year hospital scale. The contrast in absolute contaminated documents between regimes provides a procurement-relevant illustration of what verification infrastructure would change about deployment outcomes.
 
-Anything not in Sections 7.1 to 7.5 is exploratory. Exploratory analyses are permitted but must be flagged as such in the manuscript and accompanied by a statement that they were not pre-specified.
+### 7.7 What is exploratory
+
+Anything not in Sections 7.1 to 7.6 is exploratory. Exploratory analyses are permitted but must be flagged as such in the manuscript and accompanied by a statement that they were not pre-specified.
 
 ## 8. Path to posterior inference
 
@@ -292,7 +351,7 @@ All simulation code, parameter prior YAML files, run logs, output files, and ana
 
 The repository's README documents the steps required to reproduce the principal simulation results from a clean checkout. The reproducibility check is executed by an automated GitHub Actions workflow on every push to the main branch and on every pull request.
 
-The simulation is reproducible from v1.0 of this plan and the corresponding tagged release of the repository, using the seeds documented in Section 5.3, to within the 1% convergence threshold documented in Section 5.3.
+The simulation is reproducible from v2.0 of this plan and the corresponding tagged release of the repository, using the seeds documented in Section 5.3, within the split convergence criterion documented in Section 5.3 (1.5% relative on medians, 2.5% relative on tails, 1e-4 absolute floor). The v2.0 reframe does not require new simulation runs against new parameter samples; the reproducibility check verifies that the regime-stratified summary statistics (Section 7.1) and the regime contrast statistic (Section 7.2) agree across replicates within the convergence criterion.
 
 ## 10. Deviations from plan
 
@@ -364,4 +423,4 @@ A13. Roig JV. RIKER: scalable and reliable evaluation of AI knowledge retrieval 
 
 ---
 
-End of v1.0.
+End of v2.0.

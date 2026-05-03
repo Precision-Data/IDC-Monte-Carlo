@@ -48,7 +48,7 @@ DEFAULT_K: int = 10_000
 
 # Default plan version executed by this simulation. Bump on plan
 # revision via DEVIATIONS.md (Section 10).
-DEFAULT_PLAN_VERSION: str = "1.2"
+DEFAULT_PLAN_VERSION: str = "2.0"
 
 ERROR_TYPES: tuple[str, ...] = ("commission", "omission")
 

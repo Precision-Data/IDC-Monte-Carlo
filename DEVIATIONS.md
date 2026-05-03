@@ -1,6 +1,6 @@
 # Deviations from the IDC Monte Carlo Analysis Plan
 
-This file records any deviation from `ANALYSIS_PLAN.md` (currently v1.2).
+This file records any deviation from `ANALYSIS_PLAN.md` (currently v2.0).
 Per Section 10 of the plan, deviations require a version bump of the plan
 and must be transparently reported in the manuscript.
 
@@ -97,6 +97,75 @@ No code changes, no checksum changes, no plan version bump. The `severity_weight
 ### Verification
 
 Run `git diff weights/severity_weights.yaml` to confirm only comment text changed. Run `python -m idc_simulation all` and confirm the blessed checksums (`787e51befaf5...` for contamination, `df83dfe4c558...` for severity_weighted) are unchanged.
+
+---
+
+## 2026-05-02: Plan v2.0 reframe to two-regime principal analysis
+
+### Context
+
+Plan v1.2.1 specified a single-parameter-set Bayesian prior predictive across (E0, ε, P, R), with R = 0 included as a sensitivity boundary case alongside three Beta priors on R (optimistic μ = 0.05, moderate μ = 0.02, pessimistic μ = 0.005). After the principal simulation run completed and the per-cell summary statistics were reviewed, the framing was identified as methodologically problematic: R is not a property of the system but a parameter describing the existence of an external corrective process. Treating R drawn from a Beta prior with mean 0.02 to 0.05 as the principal analysis implicitly assumed verification infrastructure that does not currently exist for the majority of healthcare AI deployments.
+
+### Methodological justification for the reframe
+
+Three peer-reviewed and survey sources support the position that the principal regime should be uncorrected (R = 0) rather than the v1.2.1 specification:
+
+1. CHIME/Censinet 2025: only 10% of US health systems use automated monitoring of AI deployments.
+2. Black Book Research 2025: only 22% of health systems can produce a complete AI audit trail within 30 days.
+3. Wu et al. NOHARM Discussion 2025 (arXiv:2512.01241v2): explicit statement that "continuous, case-by-case human oversight is neither scalable nor cognitively sustainable."
+
+These sources are already cited in the companion Perspective manuscript (Confabulation_at_Scale_Perspective_v1_2). The deployment scale invoked by the framework's title and by the Original Investigation's Methods section is the deployment scale at which these survey numbers apply. An R > 0 principal analysis would therefore implicitly assume the conclusion the framework is intended to support, namely that external verification at the boundary between confabulation and entrenchment is the architectural intervention point that changes contamination dynamics.
+
+### What changes in v2.0
+
+Plan v2.0 introduces a binary regime structure:
+
+- **Uncorrected regime (R = 0).** Principal analysis. Describes the actual current state of healthcare AI deployment.
+- **Corrected regime (R drawn from Beta priors specified in Section 4.4).** Counterfactual analysis. Describes what the framework predicts becomes possible under verification infrastructure.
+
+Both regimes are computed from the same parameter samples for E0, ε, P (sampled identically), with R either fixed at 0 or drawn from its Beta prior. No new sampling, no recomputation of the underlying Monte Carlo draws. The (1 − R)^n term in the contamination function is simply skipped in the uncorrected branch.
+
+Sections of the plan modified: Status block, Section 3 (Hypotheses and claims, fully rewritten with subsections 3.1 to 3.4), Section 4.4 (R prior reframed as corrected-regime parameter only), Section 5.1 (algorithm specifies dual computation), Section 7 (analyses restructured: 7.1 regime-stratified primary, 7.2 new regime contrast statistic, 7.5 R = 0 removed from sensitivity since it is now principal), Section 9 (reproducibility wording updated to v2.0). Sections 4.1, 4.2, 4.3, 4.5, 5.2, 5.3, 5.4, 6.1, 6.2, 6.3, 6.4, 8, 10, 11, 12, 13, 14 unchanged.
+
+### Why this is a major version bump
+
+This is not a minor clarification or a textual cleanup. The principal claim of the analysis has changed from "the framework predicts contamination at level X under literature priors" to "the framework predicts contamination at level X in the absence of verification infrastructure (the actual current state) and at level Y under verification infrastructure (the counterfactual), with the contrast between X and Y as the principal contribution." That is a different scientific claim, articulated against a different set of comparisons, and the version number must reflect it.
+
+### Honest acknowledgement: this is a post-hoc reframe
+
+The reframe was identified after the principal simulation run completed and the per-cell summary statistics were reviewed. A reviewer encountering this deviation could legitimately ask whether the reframe was motivated by the simulation output rather than by methodological reflection independent of it. The honest answer is that both factors contributed: reviewing the simulation output made the implicit assumption embedded in the v1.2.1 R prior visible in a way that the priors-only specification did not. The reframe is documented in this deviation log, in the v2.0 plan version history, and in the reproducibility statement of v2.0 Section 9. The pre-specified analyses in v1.2.1 are preserved in the version history of the plan and in the git history of the repository; they have not been retroactively edited or hidden. The v1.2.1 outputs remain in the repository as the canonical record of what was computed under v1.2.1 prior to the reframe.
+
+A reader wishing to verify the v2.0 reframe is methodologically defensible can read the Section 3.2 justification, the v2.0 version history entry, this deviation log entry, and the cited evidence on the deployment landscape, and form an independent judgement.
+
+### Implementation requirements
+
+Plan v2.0 implementation requires:
+
+1. Replace `ANALYSIS_PLAN.md` in the repository with v2.0 verbatim.
+2. Update `src/idc_simulation/analyses.py` to compute both regimes from the existing parameter samples.
+3. Add new analysis function for the regime contrast statistic (Section 7.2).
+4. Update output files: extend `severity_weighted.parquet` to include a `regime` column with values "uncorrected" and "corrected", or write two parallel files (`severity_weighted_uncorrected.parquet`, `severity_weighted_corrected.parquet`); choice locked in implementation brief.
+5. Re-bless the per-cell summary statistic checksum to reflect the new larger output table.
+6. Update `tests/` to verify both regimes are computed and that the uncorrected regime produces values consistent with the closed-form geometric series limit.
+7. Update README to reflect v2.0 plan version and the regime structure.
+
+### Files affected
+
+- `ANALYSIS_PLAN.md`: replaced with v2.0.
+- `src/idc_simulation/analyses.py`: regime computation added.
+- `outputs/`: new regime-stratified files generated, new blessed checksum.
+- `tests/`: test updates for regime computation.
+- `README.md`: plan version reference updated.
+- `DEVIATIONS.md`: this entry added.
+
+### Verification
+
+After implementation:
+
+1. Confirm the underlying parameter samples (E0, ε, P, R) are bit-identical to the v1.2.1 samples by checksum on the parameter draw arrays.
+2. Run the simulation pipeline end to end and confirm CI green.
+3. Confirm that the corrected regime under each prior set, when computed from the v2.0 code, reproduces the v1.2.1 contamination values within numerical tolerance (this is the same computation under a different name).
+4. Confirm the uncorrected regime contamination values match the closed-form geometric series limit E0 × ε × (1 − P^(n+1)) / (1 − P) within numerical tolerance.
 
 ---
 
