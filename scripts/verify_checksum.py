@@ -41,10 +41,11 @@ def _hash_for(path: Path) -> str:
     name = path.name
     if name == "severity_weighted.parquet":
         # Already-aggregated summary table; hash with 6-sig-fig CSV
-        # canonicalisation per plan Section 6.3.
+        # canonicalisation per plan Section 6.3. Under plan v2.0 the
+        # leading sort key is `regime` (the table is regime-stratified).
         return sha256_dataframe_content(
             path,
-            sort_keys=("prior_set", "horizon", "tier_option"),
+            sort_keys=("regime", "prior_set", "horizon", "tier_option"),
             float_precision=6,
         )
     if name.startswith("contamination_seed") and name.endswith(".parquet"):

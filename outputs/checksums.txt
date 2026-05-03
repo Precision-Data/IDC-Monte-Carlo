@@ -13,24 +13,32 @@
 #    long-format. SHA256 is computed over the per-cell summary statistic
 #    vector (median, mean, p5, p95, Pr[contamination > 0.01]) per
 #    (prior_set, error_type, horizon), rounded to 6 significant figures
-#    -- the cross-platform-stable target specified in plan v1.2 Section 6.3.
-#    See `idc_simulation.run_log.sha256_cell_summaries` for the
-#    canonicalisation.
+#    -- the cross-platform-stable target specified in plan v2.0
+#    Section 6.3. See `idc_simulation.run_log.sha256_cell_summaries`
+#    for the canonicalisation. UNCHANGED from v1.2.1: the v2.0 reframe
+#    is a tabulation change, not a sampling change, so the underlying
+#    parameter samples and therefore this hash are bit-identical.
 #
 # 2) severity_weighted.parquet
-#    The Section 7.3 severity-weighted summary table produced by
-#    `severity_weighted_contamination()`: one row per (prior_set, horizon,
-#    tier_option), with median/mean/p5/p95/p_exceeds_threshold of severity-
-#    weighted contamination plus the p_omission/p_commission type-mixing
-#    weights. The table is already aggregated and is hashed via
-#    `sha256_dataframe_content` with sort_keys=(prior_set, horizon,
-#    tier_option) and float_precision=6.
+#    The Section 7.3 / 7.4 severity-weighted summary table produced by
+#    `severity_weighted_contamination()`. Under v2.0 the table is
+#    regime-stratified: one row per (regime, prior_set, horizon,
+#    tier_option) -- 2 x 3 x 4 x 3 = 72 rows (was 36 in v1.2.1).
+#    The hash is computed via `sha256_dataframe_content` with
+#    sort_keys=(regime, prior_set, horizon, tier_option) and
+#    float_precision=6.
 #
-# Both hashes were generated with the plan defaults (K=10000, seed=20260502,
-# plan_version=1.2, severity_weights.yaml v1.0 enabled with
+# Generated with the plan defaults (K=10000, seed=20260502,
+# plan_version=2.0, severity_weights.yaml v1.0 enabled with
 # anchored_severe_22_2_percent as the primary tier option). Confirmed
 # identical across two consecutive local runs on macOS arm64 + Python
 # 3.13.12 on 2026-05-02.
+#
+# Historical reference (v1.2.1, before the regime reframe):
+#   df83dfe4c558ff1b292d01f9b9c10e7f57ba193ea0ce394172a59b7567821b92
+#   severity_weighted.parquet (36 rows, no regime column)
+# This v1.2.1 hash is not verified by CI; it is preserved here for
+# audit traceability of what was blessed prior to the v2.0 reframe.
 
 787e51befaf5c4e17050c129ef59f17ac7673cdbb373c34053006d52000494ff  contamination_seed20260502_K10000.parquet
-df83dfe4c558ff1b292d01f9b9c10e7f57ba193ea0ce394172a59b7567821b92  severity_weighted.parquet
+78844823d20c3a128388b6f9b6c47876c19e1bb9928c2809bc6fb8754a6699d5  severity_weighted.parquet
