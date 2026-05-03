@@ -21,16 +21,25 @@ from idc_simulation.analyses import (
     MULTI_AGENT_P_MU,
     PROB_THRESHOLD,
     SeverityWeightingError,
+    add_regime_dimension,
     analyse_canonical,
     expected_harm_weight,
     hospital_scale,
     load_severity_weighting,
+    regime_contrast_statistic,
     robustness_ratio,
     sensitivity_R_zero,
     sensitivity_copula,
     sensitivity_multi_agent_P,
     severity_weighted_contamination,
     summarise_primary,
+)
+from idc_simulation.contamination import (
+    REGIME_CORRECTED,
+    REGIME_UNCORRECTED,
+    REGIMES,
+    contamination,
+    geometric_sum_factor,
 )
 from idc_simulation.priors import load_all_prior_sets
 from idc_simulation.simulation import (
@@ -73,10 +82,14 @@ def canonical_df(prior_sets, tmp_path_factory) -> pd.DataFrame:
 
 
 def test_summarise_primary_shape_and_columns(canonical_df: pd.DataFrame) -> None:
-    summary = summarise_primary(canonical_df)
-    expected_rows = 3 * len(ERROR_TYPES) * len(DEFAULT_HORIZONS)
+    df = add_regime_dimension(canonical_df)
+    summary = summarise_primary(df)
+    # v2.0: regime x prior_set x error_type x horizon = 2 * 3 * 2 * 4 = 48
+    expected_rows = len(REGIMES) * 3 * len(ERROR_TYPES) * len(DEFAULT_HORIZONS)
     assert len(summary) == expected_rows
+    assert set(summary["regime"].unique()) == set(REGIMES)
     for col in (
+        "regime",
         "prior_set",
         "error_type",
         "horizon",
@@ -92,16 +105,22 @@ def test_summarise_primary_shape_and_columns(canonical_df: pd.DataFrame) -> None
 
 
 def test_summarise_primary_orders_make_sense(canonical_df: pd.DataFrame) -> None:
-    s = summarise_primary(canonical_df)
-    # Pessimistic median > moderate median > optimistic median (commission, n=10)
-    cell = s[(s["error_type"] == "commission") & (s["horizon"] == 10)]
+    df = add_regime_dimension(canonical_df)
+    s = summarise_primary(df)
+    # Pessimistic median > moderate median > optimistic median (uncorrected, commission, n=10)
+    cell = s[
+        (s["regime"] == REGIME_UNCORRECTED)
+        & (s["error_type"] == "commission")
+        & (s["horizon"] == 10)
+    ]
     medians = cell.set_index("prior_set")["median"]
     assert medians["pessimistic"] > medians["moderate"] > medians["optimistic"]
 
 
 def test_prob_exceeds_uses_threshold(canonical_df: pd.DataFrame) -> None:
-    s = summarise_primary(canonical_df)
-    # Manual recompute on one cell
+    df = add_regime_dimension(canonical_df)
+    s = summarise_primary(df)
+    # Manual recompute on one (corrected) cell -- this is the v1.2.1 contamination
     cell_df = canonical_df[
         (canonical_df["prior_set"] == "moderate")
         & (canonical_df["error_type"] == "commission")
@@ -110,12 +129,101 @@ def test_prob_exceeds_uses_threshold(canonical_df: pd.DataFrame) -> None:
     expected = float((cell_df["contamination"] > PROB_THRESHOLD).mean())
     actual = float(
         s[
-            (s["prior_set"] == "moderate")
+            (s["regime"] == REGIME_CORRECTED)
+            & (s["prior_set"] == "moderate")
             & (s["error_type"] == "commission")
             & (s["horizon"] == 10)
         ]["prob_exceeds_0_01"].iloc[0]
     )
     assert actual == pytest.approx(expected)
+
+
+# ---------------------------------------------------------------------------
+# v2.0: regime expansion and the brief's required regime tests
+# ---------------------------------------------------------------------------
+
+
+def test_add_regime_dimension_doubles_row_count(canonical_df: pd.DataFrame) -> None:
+    expanded = add_regime_dimension(canonical_df)
+    assert len(expanded) == 2 * len(canonical_df)
+    assert set(expanded["regime"].unique()) == {REGIME_UNCORRECTED, REGIME_CORRECTED}
+
+
+def test_corrected_regime_equals_v1_2_1_contamination(
+    canonical_df: pd.DataFrame,
+) -> None:
+    """The corrected-regime contamination values must equal the
+    v1.2.1 contamination values per sample (this is the same
+    computation under a different name; brief Section 4 spec).
+    """
+    expanded = add_regime_dimension(canonical_df)
+    corr = expanded[expanded["regime"] == REGIME_CORRECTED].sort_values(
+        ["prior_set", "error_type", "sample_index", "horizon"]
+    ).reset_index(drop=True)
+    base = canonical_df.sort_values(
+        ["prior_set", "error_type", "sample_index", "horizon"]
+    ).reset_index(drop=True)
+    np.testing.assert_allclose(
+        corr["contamination"].to_numpy(),
+        base["contamination"].to_numpy(),
+        rtol=0,
+        atol=1e-9,
+    )
+
+
+def test_uncorrected_regime_matches_closed_form_geometric_series(
+    canonical_df: pd.DataFrame,
+) -> None:
+    """The uncorrected-regime contamination values must equal the
+    closed-form geometric series E0 * eps * (1 - P^(n+1)) / (1 - P)
+    per sample within 1e-12 (exact arithmetic, no Monte Carlo error).
+    """
+    expanded = add_regime_dimension(canonical_df)
+    uncorr = expanded[expanded["regime"] == REGIME_UNCORRECTED]
+    expected = (
+        uncorr["E0"].to_numpy()
+        * uncorr["epsilon"].to_numpy()
+        * geometric_sum_factor(uncorr["P"].to_numpy(), uncorr["horizon"].to_numpy())
+    )
+    np.testing.assert_allclose(
+        uncorr["contamination"].to_numpy(),
+        expected,
+        rtol=0,
+        atol=1e-12,
+    )
+
+
+def test_regime_contrast_monotonicity_ge_one(canonical_df: pd.DataFrame) -> None:
+    """The regime contrast (median uncorrected / median corrected)
+    must be >= 1.0 for every cell because (1 - R)^n <= 1 for R in [0, 1].
+    """
+    df = add_regime_dimension(canonical_df)
+    summary = summarise_primary(df)
+    contrast = regime_contrast_statistic(summary)
+    assert (contrast["regime_contrast"] >= 1.0 - 1e-12).all(), (
+        "Regime contrast violated 1.0 lower bound: " +
+        contrast[contrast["regime_contrast"] < 1.0].to_string()
+    )
+
+
+def test_regime_contrast_increases_with_horizon_for_moderate(
+    canonical_df: pd.DataFrame,
+) -> None:
+    """For moderate prior + commission, the regime contrast ratio
+    should increase monotonically with horizon n (the benefit of
+    correction compounds over time, since (1 - R)^n decays in n).
+    """
+    df = add_regime_dimension(canonical_df)
+    summary = summarise_primary(df)
+    contrast = regime_contrast_statistic(summary)
+    cell = contrast[
+        (contrast["prior_set"] == "moderate")
+        & (contrast["error_type"] == "commission")
+    ].sort_values("horizon")
+    ratios = cell["regime_contrast"].to_numpy()
+    assert (np.diff(ratios) >= -1e-9).all(), (
+        f"Regime contrast not monotonically non-decreasing in n: {ratios}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -220,6 +328,7 @@ def test_severity_weighted_writes_parquet_with_expected_schema(
     assert out.is_file()
     sw = pd.read_parquet(out)
     expected_cols = {
+        "regime",
         "prior_set",
         "horizon",
         "tier_option",
@@ -232,8 +341,9 @@ def test_severity_weighted_writes_parquet_with_expected_schema(
         "p_commission",
     }
     assert set(sw.columns) == expected_cols
-    # 3 prior_sets * 4 horizons * 3 tier_options = 36 rows
-    assert len(sw) == 3 * 4 * 3
+    # v2.0: 2 regimes * 3 prior_sets * 4 horizons * 3 tier_options = 72 rows
+    assert len(sw) == 2 * 3 * 4 * 3
+    assert set(sw["regime"].unique()) == set(REGIMES)
     assert sw["p_omission"].to_list() == pytest.approx([0.766] * len(sw))
     assert sw["p_commission"].to_list() == pytest.approx([0.234] * len(sw))
 
@@ -242,8 +352,10 @@ def test_severity_weighted_severe_only_equals_25x_type_weighted(
     prior_sets, tmp_path
 ) -> None:
     """Per the brief: severity-weighted under severe_only should be 25x
-    the unweighted (type-mixed) contamination, where 25 is the severe
-    tier weight from the YAML.
+    the type-mixed contamination, where 25 is the severe tier weight
+    from the YAML. Verified for the corrected regime (which equals
+    v1.2.1 contamination). Same property holds for the uncorrected
+    regime by construction.
     """
     import numpy as np
 
@@ -269,7 +381,8 @@ def test_severity_weighted_severe_only_equals_25x_type_weighted(
         type_weighted = p_co * comm + p_om * omis
         expected_median = float(np.median(type_weighted * 25.0))
         actual = sw[
-            (sw["prior_set"] == ps)
+            (sw["regime"] == REGIME_CORRECTED)
+            & (sw["prior_set"] == ps)
             & (sw["horizon"] == int(h))
             & (sw["tier_option"] == "severe_only")
         ]["median"].iloc[0]
@@ -340,7 +453,11 @@ def test_multi_agent_P_centred_at_0_65(prior_sets) -> None:
 
 
 def test_robustness_ratio_returns_sensible_verdict(canonical_df: pd.DataFrame) -> None:
-    out = robustness_ratio(canonical_df, horizon=10, error_type="commission")
+    df = add_regime_dimension(canonical_df)
+    out = robustness_ratio(
+        df, horizon=10, error_type="commission", regime=REGIME_UNCORRECTED
+    )
+    assert out["regime"] == REGIME_UNCORRECTED
     assert out["pessimistic_p95"] > out["optimistic_p5"] > 0
     assert out["ratio"] > 1.0
     assert out["verdict"] in {"robust", "intermediate", "sensitive"}
@@ -352,13 +469,15 @@ def test_robustness_ratio_returns_sensible_verdict(canonical_df: pd.DataFrame) -
 
 
 def test_hospital_scale_uses_full_multiplier(canonical_df: pd.DataFrame) -> None:
-    h = hospital_scale(canonical_df)
-    assert len(h) == 3 * len(ERROR_TYPES)
+    df = add_regime_dimension(canonical_df)
+    h = hospital_scale(df)
+    # v2.0: 2 regimes * 3 prior_sets * 2 error_types = 12 rows
+    assert len(h) == len(REGIMES) * 3 * len(ERROR_TYPES)
     assert (h["docs_per_year"] == HOSPITAL_DOCS_PER_YEAR).all()
     assert (h["years"] == HOSPITAL_YEARS).all()
     assert (h["horizon"] == HOSPITAL_HORIZON).all()
-    # Median scales by docs_per_year * years compared with the per-confab
-    # contamination median at horizon 10.
+    # Corrected median scales by docs_per_year * years compared with the
+    # v1.2.1 per-confab contamination median at horizon 10.
     pcc = canonical_df[
         (canonical_df["horizon"] == HOSPITAL_HORIZON)
         & (canonical_df["prior_set"] == "moderate")
@@ -366,9 +485,11 @@ def test_hospital_scale_uses_full_multiplier(canonical_df: pd.DataFrame) -> None
     ]["contamination"]
     expected = float(np.median(pcc) * HOSPITAL_DOCS_PER_YEAR * HOSPITAL_YEARS)
     actual = float(
-        h[(h["prior_set"] == "moderate") & (h["error_type"] == "commission")][
-            "median"
-        ].iloc[0]
+        h[
+            (h["regime"] == REGIME_CORRECTED)
+            & (h["prior_set"] == "moderate")
+            & (h["error_type"] == "commission")
+        ]["median"].iloc[0]
     )
     assert actual == pytest.approx(expected)
 
@@ -393,11 +514,20 @@ def test_analyse_canonical_runs_end_to_end(prior_sets, tmp_path) -> None:
         weights_path=WEIGHTS_PATH,
         output_dir=tmp_path / "rendered",
     )
-    assert len(out.primary) == 3 * len(ERROR_TYPES) * len(DEFAULT_HORIZONS)
-    assert len(out.hospital) == 3 * len(ERROR_TYPES)
-    assert "ratio" in out.robustness
+    # v2.0 shapes:
+    #   primary: 2 regimes * 3 prior_sets * 2 error_types * 4 horizons = 48
+    #   hospital: 2 regimes * 3 prior_sets * 2 error_types = 12
+    #   regime_contrast: 3 prior_sets * 2 error_types * 4 horizons = 24
+    #   severity_weighted: 2 regimes * 3 prior_sets * 4 horizons * 3 tier_options = 72
+    assert len(out.primary) == len(REGIMES) * 3 * len(ERROR_TYPES) * len(DEFAULT_HORIZONS)
+    assert len(out.hospital) == len(REGIMES) * 3 * len(ERROR_TYPES)
+    assert len(out.regime_contrast) == 3 * len(ERROR_TYPES) * len(DEFAULT_HORIZONS)
+    assert "ratio" in out.robustness_uncorrected
+    assert "ratio" in out.robustness_corrected
+    assert out.robustness_uncorrected["regime"] == REGIME_UNCORRECTED
+    assert out.robustness_corrected["regime"] == REGIME_CORRECTED
     assert out.severity_status.enabled is True
     assert out.severity_weighted is not None
-    assert len(out.severity_weighted) == 3 * len(DEFAULT_HORIZONS) * 3
+    assert len(out.severity_weighted) == len(REGIMES) * 3 * len(DEFAULT_HORIZONS) * 3
     assert out.severity_weighted_path is not None
     assert out.severity_weighted_path.is_file()

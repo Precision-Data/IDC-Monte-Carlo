@@ -68,36 +68,46 @@ def _write_csv(path: Path, df: pd.DataFrame) -> Path:
 
 
 def _figure_credible_intervals(df_primary: pd.DataFrame, out_path: Path) -> Path:
-    """Median + 90% CI of contamination at each horizon, per prior set.
-
-    Two panels: commission (left), omission (right).
+    """Median + 90% CI of contamination at each horizon, per prior set,
+    per regime (v2.0). Two panels: commission (left), omission (right).
+    Solid line = uncorrected (principal regime); dashed line = corrected
+    (counterfactual regime).
     """
     fig, axes = plt.subplots(1, 2, figsize=(11, 4.5), sharey=True)
     colors = {"optimistic": "#2c7bb6", "moderate": "#fdae61", "pessimistic": "#d7191c"}
+    regime_styles = {"uncorrected": ("-", "o"), "corrected": ("--", "s")}
     for ax, etype in zip(axes, ("commission", "omission")):
         cell = df_primary[df_primary["error_type"] == etype]
         for ps in ("optimistic", "moderate", "pessimistic"):
-            row = cell[cell["prior_set"] == ps].sort_values("horizon")
-            ax.fill_between(
-                row["horizon"],
-                row["ci90_low"],
-                row["ci90_high"],
-                color=colors[ps],
-                alpha=0.25,
-            )
-            ax.plot(
-                row["horizon"],
-                row["median"],
-                marker="o",
-                color=colors[ps],
-                label=ps,
-            )
+            for regime, (ls, marker) in regime_styles.items():
+                row = cell[
+                    (cell["prior_set"] == ps) & (cell["regime"] == regime)
+                ].sort_values("horizon")
+                if regime == "uncorrected":
+                    ax.fill_between(
+                        row["horizon"],
+                        row["ci90_low"],
+                        row["ci90_high"],
+                        color=colors[ps],
+                        alpha=0.20,
+                    )
+                ax.plot(
+                    row["horizon"],
+                    row["median"],
+                    linestyle=ls,
+                    marker=marker,
+                    color=colors[ps],
+                    label=f"{ps} ({regime})",
+                )
         ax.set_xlabel("Encounter index n")
         ax.set_title(f"{etype.capitalize()} errors")
         ax.grid(True, alpha=0.3)
     axes[0].set_ylabel("Per-confabulation contamination")
-    axes[0].legend(loc="upper right", frameon=False)
-    fig.suptitle("Contamination(n): median and 90% prior credible interval")
+    axes[0].legend(loc="upper left", frameon=False, fontsize=7, ncol=2)
+    fig.suptitle(
+        "Contamination(n): median and 90% prior credible interval, "
+        "uncorrected (solid) vs corrected (dashed)"
+    )
     fig.tight_layout()
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, dpi=FIGURE_DPI)
@@ -108,19 +118,28 @@ def _figure_credible_intervals(df_primary: pd.DataFrame, out_path: Path) -> Path
 def _figure_box_at_horizon(
     df_canonical: pd.DataFrame, horizon: int, out_path: Path
 ) -> Path:
-    """Boxplot of the contamination distribution at one horizon."""
+    """Boxplot of the contamination distribution at one horizon, both
+    regimes shown as adjacent boxes per prior set (v2.0).
+    """
     fig, axes = plt.subplots(1, 2, figsize=(11, 4.5), sharey=True)
+    prior_order = ("optimistic", "moderate", "pessimistic")
     for ax, etype in zip(axes, ("commission", "omission")):
         sub = df_canonical[
             (df_canonical["horizon"] == horizon) & (df_canonical["error_type"] == etype)
         ]
-        groups = [
-            sub.loc[sub["prior_set"] == ps, "contamination"].to_numpy()
-            for ps in ("optimistic", "moderate", "pessimistic")
-        ]
+        groups = []
+        labels = []
+        for ps in prior_order:
+            for regime in ("uncorrected", "corrected"):
+                vals = sub.loc[
+                    (sub["prior_set"] == ps) & (sub["regime"] == regime),
+                    "contamination",
+                ].to_numpy()
+                groups.append(vals)
+                labels.append(f"{ps[:3]}\n{regime[:5]}")
         ax.boxplot(
             groups,
-            tick_labels=["optimistic", "moderate", "pessimistic"],
+            tick_labels=labels,
             showfliers=False,
             whis=(5, 95),
         )
@@ -129,7 +148,7 @@ def _figure_box_at_horizon(
         ax.grid(True, which="both", axis="y", alpha=0.3)
     axes[0].set_ylabel("Per-confabulation contamination (log)")
     fig.suptitle(
-        f"Contamination(n={horizon}) by prior set "
+        f"Contamination(n={horizon}) by prior set and regime "
         "(box: IQR; whiskers: 5th-95th percentile)"
     )
     fig.tight_layout()
@@ -186,13 +205,25 @@ def write_all_outputs(
         (
             _write_csv(tables_dir / "table_hospital_scale.csv", result.hospital),
             "Hospital-scale summary at horizon "
-            f"{HOSPITAL_HORIZON} (Section 7.5)",
+            f"{HOSPITAL_HORIZON} (Section 7.6, regime-stratified)",
         )
     )
     written.append(
         (
-            _write_json(tables_dir / "robustness_summary.json", result.robustness),
-            "Robustness ratio (Section 7.4.d)",
+            _write_csv(tables_dir / "regime_contrast.csv", result.regime_contrast),
+            "Regime contrast statistic (Section 7.2)",
+        )
+    )
+    written.append(
+        (
+            _write_json(
+                tables_dir / "robustness_summary.json",
+                {
+                    "uncorrected": result.robustness_uncorrected,
+                    "corrected": result.robustness_corrected,
+                },
+            ),
+            "Robustness ratio per regime (Section 7.5)",
         )
     )
     written.append(
@@ -222,14 +253,16 @@ def write_all_outputs(
             )
         )
 
-    # Figures
-    df_canonical = pd.read_parquet(parquet_path)
+    # Figures (regime-aware, v2.0)
+    from .analyses import add_regime_dimension
+
+    df_canonical = add_regime_dimension(pd.read_parquet(parquet_path))
     written.append(
         (
             _figure_credible_intervals(
                 result.primary, figures_dir / "credible_intervals_by_horizon.png"
             ),
-            "Figure: median + 90% CI by horizon (Section 7.1 visual)",
+            "Figure: median + 90% CI by horizon, both regimes (Section 7.1 visual)",
         )
     )
     written.append(
@@ -237,7 +270,7 @@ def write_all_outputs(
             _figure_box_at_horizon(
                 df_canonical, HOSPITAL_HORIZON, figures_dir / "contamination_box_h10.png"
             ),
-            f"Figure: contamination distribution at n={HOSPITAL_HORIZON}",
+            f"Figure: contamination distribution at n={HOSPITAL_HORIZON} by regime",
         )
     )
 

@@ -34,26 +34,70 @@ from scipy.stats import beta as _beta_dist
 from scipy.stats import multivariate_normal as _mvn
 from scipy.stats import norm as _norm
 
-from .contamination import contamination
+from .contamination import (
+    REGIME_CORRECTED,
+    REGIME_UNCORRECTED,
+    REGIMES,
+    contamination,
+    geometric_sum_factor,
+)
 from .priors import PARAMETER_NAMES, PriorSet
 
 
 # ---------------------------------------------------------------------------
-# Section 7.1 + 7.2: primary distributional summaries
+# v2.0 regime expansion of the canonical Parquet
+# ---------------------------------------------------------------------------
+# The canonical contamination_seed*.parquet file contains the corrected
+# regime values only (its ``contamination`` column was computed with R
+# applied per v1.2.1). For v2.0 analyses the dataframe is expanded into
+# a long format with a ``regime`` column: each input row becomes two
+# output rows, one per regime. The uncorrected values are computed
+# on-the-fly from the (E0, epsilon, P, horizon) columns; no new sampling
+# and no edits to the canonical Parquet are required, preserving the
+# v1.2.1 blessed checksum 787e51b... unchanged.
+
+
+def add_regime_dimension(df: pd.DataFrame) -> pd.DataFrame:
+    """Return a v2.0-style long-format dataframe with a ``regime`` column.
+
+    Each input row is duplicated into a corrected row (existing
+    ``contamination`` value) and an uncorrected row (recomputed as
+    ``E0 * epsilon * (1 - P^(n+1)) / (1 - P)``).
+    """
+    geom = geometric_sum_factor(df["P"].to_numpy(), df["horizon"].to_numpy())
+    uncorr = df["E0"].to_numpy() * df["epsilon"].to_numpy() * geom
+
+    corrected = df.assign(regime=REGIME_CORRECTED)
+    uncorrected = df.assign(regime=REGIME_UNCORRECTED, contamination=uncorr)
+    out = pd.concat([uncorrected, corrected], ignore_index=True)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Section 7.1 + 7.2: primary distributional summaries (regime-stratified)
 # ---------------------------------------------------------------------------
 
 
-PRIMARY_GROUP_KEYS: tuple[str, ...] = ("prior_set", "error_type", "horizon")
+PRIMARY_GROUP_KEYS: tuple[str, ...] = ("regime", "prior_set", "error_type", "horizon")
 PROB_THRESHOLD: float = 0.01  # Section 7.1: Pr[Contamination(n) > 0.01]
 
 
 def summarise_primary(df: pd.DataFrame) -> pd.DataFrame:
     """One-row-per-cell summary of contamination samples.
 
-    Columns: median, mean, p5, p95, ci90_low, ci90_high, prob_exceeds.
-    Implements Section 7.1 (and via the per-error_type grouping, the
-    type decomposition of Section 7.2).
+    For v2.0 the input dataframe is expected to carry a ``regime`` column
+    (apply :func:`add_regime_dimension` to the canonical Parquet first).
+    Returned columns: regime, prior_set, error_type, horizon, median,
+    mean, p5, p95, ci90_low, ci90_high, prob_exceeds_0_01.
+
+    Implements Section 7.1 (and via the per-(regime, error_type)
+    grouping, the type decomposition of Section 7.3 under both regimes).
     """
+    if "regime" not in df.columns:
+        raise ValueError(
+            "summarise_primary expects a regime-aware dataframe; apply "
+            "add_regime_dimension() to the canonical Parquet first."
+        )
 
     def _agg(s: pd.Series) -> pd.Series:
         a = s.to_numpy()
@@ -77,6 +121,57 @@ def summarise_primary(df: pd.DataFrame) -> pd.DataFrame:
         .unstack()
         .reset_index()
     )
+
+
+# ---------------------------------------------------------------------------
+# Section 7.2: regime contrast statistic
+# ---------------------------------------------------------------------------
+
+
+def regime_contrast_statistic(summary: pd.DataFrame) -> pd.DataFrame:
+    """Section 7.2: median(uncorrected) / median(corrected) per cell.
+
+    Takes the regime-stratified summary produced by
+    :func:`summarise_primary` and returns one row per
+    (prior_set, error_type, horizon) with columns:
+
+      median_uncorrected, median_corrected, regime_contrast
+
+    A ratio of 1.0 means correction yields no benefit; >1.0 means
+    correction reduces contamination; growth with horizon means the
+    benefit of correction compounds over time.
+    """
+    needed = {"regime", "prior_set", "error_type", "horizon", "median"}
+    missing = needed - set(summary.columns)
+    if missing:
+        raise ValueError(f"regime_contrast_statistic missing columns: {missing}")
+
+    pivot = summary.pivot_table(
+        index=["prior_set", "error_type", "horizon"],
+        columns="regime",
+        values="median",
+        aggfunc="first",
+    ).reset_index()
+    pivot.columns.name = None
+    pivot = pivot.rename(
+        columns={
+            REGIME_UNCORRECTED: "median_uncorrected",
+            REGIME_CORRECTED: "median_corrected",
+        }
+    )
+    pivot["regime_contrast"] = pivot["median_uncorrected"] / pivot[
+        "median_corrected"
+    ].where(pivot["median_corrected"] > 0, np.nan)
+    return pivot[
+        [
+            "prior_set",
+            "error_type",
+            "horizon",
+            "median_uncorrected",
+            "median_corrected",
+            "regime_contrast",
+        ]
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -305,23 +400,25 @@ def severity_weighted_contamination(
             "function only when status.enabled is true."
         )
 
-    df = pd.read_parquet(canonical_output_path)
+    raw = pd.read_parquet(canonical_output_path)
+    df = add_regime_dimension(raw)
     p_om = status.type_distribution_severe["p_omission"]
     p_co = status.type_distribution_severe["p_commission"]
 
     rows: list[dict] = []
-    cells = df.groupby(["prior_set", "horizon"], sort=True)
+    cells = df.groupby(["regime", "prior_set", "horizon"], sort=True)
     tier_names = [status.primary_tier_option, *status.sensitivity_tier_options]
     seen: set[str] = set()
     ordered_tiers = [t for t in tier_names if not (t in seen or seen.add(t))]
 
-    for (ps, h), grp in cells:
+    for (regime, ps, h), grp in cells:
         comm = grp.loc[grp["error_type"] == "commission", "contamination"].to_numpy()
         omis = grp.loc[grp["error_type"] == "omission", "contamination"].to_numpy()
         if comm.size != omis.size or comm.size == 0:
             raise SeverityWeightingError(
-                f"cell prior_set={ps} horizon={h}: expected matched K samples "
-                f"of commission and omission (got {comm.size} vs {omis.size})"
+                f"cell regime={regime} prior_set={ps} horizon={h}: expected "
+                f"matched K samples of commission and omission "
+                f"(got {comm.size} vs {omis.size})"
             )
         type_weighted = p_co * comm + p_om * omis
         for tname in ordered_tiers:
@@ -330,6 +427,7 @@ def severity_weighted_contamination(
             p5, p50, p95 = np.percentile(weighted, [5, 50, 95])
             rows.append(
                 {
+                    "regime": regime,
                     "prior_set": ps,
                     "horizon": int(h),
                     "tier_option": tname,
@@ -344,9 +442,9 @@ def severity_weighted_contamination(
             )
 
     out_df = pd.DataFrame(rows)
-    out_df = out_df.sort_values(["prior_set", "horizon", "tier_option"]).reset_index(
-        drop=True
-    )
+    out_df = out_df.sort_values(
+        ["regime", "prior_set", "horizon", "tier_option"]
+    ).reset_index(drop=True)
 
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -509,13 +607,27 @@ def robustness_ratio(
     *,
     horizon: int = 10,
     error_type: str = "commission",
+    regime: str = REGIME_UNCORRECTED,
 ) -> dict:
-    """Section 7.4.d: pessimistic 95th / optimistic 5th at horizon n.
+    """Section 7.5: pessimistic 95th / optimistic 5th at horizon n, per regime.
 
-    Returns a dict with the ratio, the two underlying percentiles, and
-    a verdict relative to the thresholds 25 (robust) and 50 (sensitive).
+    For v2.0 the ratio is computed per regime (the principal regime is
+    uncorrected, R = 0). Returns a dict with the ratio, the two
+    underlying percentiles, and a verdict against the 25/50 thresholds.
+
+    The dataframe must carry a ``regime`` column (apply
+    :func:`add_regime_dimension` to the canonical Parquet first).
     """
-    cell = df[(df["horizon"] == horizon) & (df["error_type"] == error_type)]
+    if "regime" not in df.columns:
+        raise ValueError(
+            "robustness_ratio expects a regime-aware dataframe; apply "
+            "add_regime_dimension() to the canonical Parquet first."
+        )
+    cell = df[
+        (df["regime"] == regime)
+        & (df["horizon"] == horizon)
+        & (df["error_type"] == error_type)
+    ]
     p_pess = float(
         np.percentile(
             cell.loc[cell["prior_set"] == "pessimistic", "contamination"], 95
@@ -534,6 +646,7 @@ def robustness_ratio(
     else:
         verdict = "intermediate"
     return {
+        "regime": regime,
         "horizon": horizon,
         "error_type": error_type,
         "pessimistic_p95": p_pess,
@@ -562,12 +675,20 @@ def hospital_scale(
     years: int = HOSPITAL_YEARS,
     horizon: int = HOSPITAL_HORIZON,
 ) -> pd.DataFrame:
-    """Section 7.5: scale per-confabulation contamination to hospital
-    output (default: 100,000 documents/year, 5 years, n = 10).
+    """Section 7.6: scale per-confabulation contamination to hospital
+    output (default: 100,000 documents/year, 5 years, n = 10),
+    regime-stratified.
 
-    Returns one row per (prior_set, error_type) with the median and 90%
-    credible interval of contaminated documents over the horizon.
+    Returns one row per (regime, prior_set, error_type) with the median
+    and 90% credible interval of contaminated documents over the horizon.
+    The regime contrast in absolute contaminated documents is the
+    procurement-relevant illustration described in Section 7.6.
     """
+    if "regime" not in df.columns:
+        raise ValueError(
+            "hospital_scale expects a regime-aware dataframe; apply "
+            "add_regime_dimension() to the canonical Parquet first."
+        )
     multiplier = docs_per_year * years
     cell = df[df["horizon"] == horizon].copy()
     cell["contaminated_documents"] = cell["contamination"] * multiplier
@@ -585,7 +706,7 @@ def hospital_scale(
         )
 
     out = (
-        cell.groupby(["prior_set", "error_type"])["contaminated_documents"]
+        cell.groupby(["regime", "prior_set", "error_type"])["contaminated_documents"]
         .apply(_agg)
         .unstack()
         .reset_index()
@@ -605,7 +726,9 @@ def hospital_scale(
 class AnalysisResult:
     primary: pd.DataFrame
     hospital: pd.DataFrame
-    robustness: dict
+    robustness_uncorrected: dict
+    robustness_corrected: dict
+    regime_contrast: pd.DataFrame
     severity_status: SeverityWeightingStatus
     severity_weighted: pd.DataFrame | None
     severity_weighted_path: Path | None
@@ -617,24 +740,27 @@ def analyse_canonical(
     weights_path: str | Path,
     output_dir: str | Path | None = None,
 ) -> AnalysisResult:
-    """Run all Section 7 analyses that consume only the canonical Parquet.
+    """Run all Section 7 v2.0 analyses on the canonical Parquet.
 
-    When the severity-weighting gate (severity_weights.yaml ``enabled``)
-    is true and ``output_dir`` is supplied, the Section 7.3 weighted
-    analysis is computed via :func:`severity_weighted_contamination` and
-    written as ``severity_weighted.parquet`` under ``output_dir``. The
-    in-memory DataFrame and the file path are both returned in the
-    :class:`AnalysisResult`.
+    Reads the canonical (corrected-only) Parquet, expands it to a
+    regime-stratified long format via :func:`add_regime_dimension`, and
+    computes:
 
-    When ``output_dir`` is omitted but the gate is open, the weighted
-    analysis still runs in-memory (no Parquet written). When the gate
-    is closed (``enabled: false``) the analysis is skipped and the
-    deviation justification is recorded in ``severity_status``.
+      - Section 7.1 / 7.3 primary distributional summaries (regime x
+        prior_set x error_type x horizon)
+      - Section 7.2 regime contrast statistic
+      - Section 7.5 robustness ratio per regime
+      - Section 7.6 hospital-scale illustration per regime
+      - Section 7.4 severity-weighted contamination per regime
+        (gated on severity_weights.yaml.enabled)
     """
-    df = pd.read_parquet(parquet_path)
+    raw = pd.read_parquet(parquet_path)
+    df = add_regime_dimension(raw)
     primary = summarise_primary(df)
     hospital = hospital_scale(df)
-    rob = robustness_ratio(df)
+    rob_uncorr = robustness_ratio(df, regime=REGIME_UNCORRECTED)
+    rob_corr = robustness_ratio(df, regime=REGIME_CORRECTED)
+    contrast = regime_contrast_statistic(primary)
     sev_status = load_severity_weighting(weights_path)
     sev_df: pd.DataFrame | None = None
     sev_path: Path | None = None
@@ -645,8 +771,6 @@ def analyse_canonical(
             )
             sev_df = pd.read_parquet(sev_path)
         else:
-            # In-memory recomputation when no output_dir is supplied
-            # (used by tests that don't want filesystem side effects).
             import tempfile
 
             with tempfile.TemporaryDirectory() as td:
@@ -655,7 +779,9 @@ def analyse_canonical(
     return AnalysisResult(
         primary=primary,
         hospital=hospital,
-        robustness=rob,
+        robustness_uncorrected=rob_uncorr,
+        robustness_corrected=rob_corr,
+        regime_contrast=contrast,
         severity_status=sev_status,
         severity_weighted=sev_df,
         severity_weighted_path=sev_path,
