@@ -55,6 +55,12 @@ def geometric_sum_factor(P: ArrayLike, n: ArrayLike) -> NDArray[np.float64]:
     return np.where(near_one, n_arr + 1.0, main)
 
 
+# Regime names per ANALYSIS_PLAN.md v2.0 Section 3.1.
+REGIME_UNCORRECTED: str = "uncorrected"  # R = 0, principal analysis
+REGIME_CORRECTED: str = "corrected"      # R drawn from Beta prior, counterfactual
+REGIMES: tuple[str, ...] = (REGIME_UNCORRECTED, REGIME_CORRECTED)
+
+
 def contamination(
     E0: ArrayLike,
     epsilon: ArrayLike,
@@ -92,3 +98,41 @@ def contamination(
     geom = geometric_sum_factor(P_a, n_a)
     decay = np.power(1.0 - R_a, n_a)
     return E0_a * eps_a * geom * decay
+
+
+def contamination_dual_regime(
+    E0: ArrayLike,
+    epsilon: ArrayLike,
+    P: ArrayLike,
+    R: ArrayLike,
+    n: ArrayLike,
+) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+    """Evaluate both v2.0 regimes from the same parameter samples.
+
+    Returns ``(uncorrected, corrected)`` where:
+
+      uncorrected[k] = E0[k] * epsilon[k] * (1 - P[k]^(n+1)) / (1 - P[k])
+      corrected[k]   = uncorrected[k] * (1 - R[k])^n
+
+    The two values share the geometric-series factor; only the
+    ``(1 - R)^n`` decay term differs. The R argument is consumed only
+    for the corrected regime: per ANALYSIS_PLAN.md v2.0 Section 3.1
+    the uncorrected regime fixes R = 0 (no external corrective
+    process), so we apply that branch directly without touching R.
+
+    The returned arrays are guaranteed to satisfy
+    ``corrected <= uncorrected`` element-wise for any R in [0, 1].
+    """
+    E0_a = np.asarray(E0, dtype=np.float64)
+    eps_a = np.asarray(epsilon, dtype=np.float64)
+    P_a = np.asarray(P, dtype=np.float64)
+    R_a = np.asarray(R, dtype=np.float64)
+    n_a = np.asarray(n, dtype=np.float64)
+
+    if np.any(n_a < 0):
+        raise ValueError("n must be non-negative")
+
+    geom = geometric_sum_factor(P_a, n_a)
+    base = E0_a * eps_a * geom
+    decay = np.power(1.0 - R_a, n_a)
+    return base, base * decay

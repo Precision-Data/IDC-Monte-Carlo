@@ -9,7 +9,11 @@ import numpy as np
 import pytest
 
 from idc_simulation.contamination import (
+    REGIMES,
+    REGIME_CORRECTED,
+    REGIME_UNCORRECTED,
     contamination,
+    contamination_dual_regime,
     geometric_sum_factor,
 )
 
@@ -123,3 +127,70 @@ def test_geometric_sum_at_n_zero_is_one_for_any_P() -> None:
     Ps = np.array([0.0, 0.1, 0.5, 0.9, 0.999])
     g = geometric_sum_factor(Ps, 0)
     np.testing.assert_allclose(g, 1.0, atol=1e-12)
+
+
+# ---------------------------------------------------------------------------
+# v2.0 dual-regime helper
+# ---------------------------------------------------------------------------
+
+
+def test_regime_constants_have_expected_names() -> None:
+    assert REGIME_UNCORRECTED == "uncorrected"
+    assert REGIME_CORRECTED == "corrected"
+    assert REGIMES == ("uncorrected", "corrected")
+
+
+def test_dual_regime_uncorrected_matches_R_zero() -> None:
+    K = 1000
+    rng = np.random.default_rng(0)
+    E0 = rng.beta(12.5, 487.5, size=K)
+    eps = rng.beta(9.0, 21.0, size=K)
+    P = rng.beta(10.0, 10.0, size=K)
+    R = rng.beta(2.0, 98.0, size=K)
+    uncorr, _ = contamination_dual_regime(E0, eps, P, R, n=10)
+    expected = contamination(E0=E0, epsilon=eps, P=P, R=0.0, n=10)
+    np.testing.assert_allclose(uncorr, expected, rtol=0, atol=1e-15)
+
+
+def test_dual_regime_corrected_matches_full_formula() -> None:
+    K = 1000
+    rng = np.random.default_rng(1)
+    E0 = rng.beta(12.5, 487.5, size=K)
+    eps = rng.beta(9.0, 21.0, size=K)
+    P = rng.beta(10.0, 10.0, size=K)
+    R = rng.beta(2.0, 98.0, size=K)
+    _, corr = contamination_dual_regime(E0, eps, P, R, n=10)
+    expected = contamination(E0=E0, epsilon=eps, P=P, R=R, n=10)
+    np.testing.assert_allclose(corr, expected, rtol=0, atol=1e-15)
+
+
+def test_dual_regime_corrected_le_uncorrected_pointwise() -> None:
+    K = 5000
+    rng = np.random.default_rng(2)
+    E0 = rng.beta(12.5, 487.5, size=K)
+    eps = rng.beta(9.0, 21.0, size=K)
+    P = rng.beta(10.0, 10.0, size=K)
+    R = rng.beta(2.0, 98.0, size=K)
+    for n in (1, 5, 10, 20):
+        uncorr, corr = contamination_dual_regime(E0, eps, P, R, n=n)
+        assert (corr <= uncorr + 1e-15).all(), (
+            f"corrected exceeded uncorrected at n={n}"
+        )
+
+
+def test_dual_regime_equal_at_R_zero() -> None:
+    K = 500
+    rng = np.random.default_rng(3)
+    E0 = rng.beta(12.5, 487.5, size=K)
+    eps = rng.beta(9.0, 21.0, size=K)
+    P = rng.beta(10.0, 10.0, size=K)
+    R_zero = np.zeros(K)
+    uncorr, corr = contamination_dual_regime(E0, eps, P, R_zero, n=15)
+    np.testing.assert_allclose(uncorr, corr, rtol=0, atol=1e-15)
+
+
+def test_dual_regime_negative_n_raises() -> None:
+    with pytest.raises(ValueError, match="non-negative"):
+        contamination_dual_regime(
+            E0=0.025, epsilon=0.3, P=0.5, R=0.02, n=-1
+        )
